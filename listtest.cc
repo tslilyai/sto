@@ -5,7 +5,7 @@
 #include <random>
 #include <map>
 #include <sys/time.h>
-#include "StoWrapper.hh"
+#include "ChoppedTransaction.hh"
 #include "ListTester.hh"
 
 #define PRINT_DEBUG 0
@@ -103,5 +103,4 @@ int main() {
         printf("total_n: %llu, total_r: %llu, total_w: %llu, total_searched: %llu, total_aborts: %llu (%llu aborts at commit time)\n", tc.p(txp_total_n), tc.p(txp_total_r), tc.p(txp_total_w), tc.p(txp_total_searched), tc.p(txp_total_aborts), tc.p(txp_commit_time_aborts));
     }
 #endif
-    
 }

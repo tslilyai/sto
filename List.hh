@@ -477,7 +477,6 @@ private:
     acquire_fence();
   }
 
-
   void lock(list_lock_type& v) {
     TransactionTid::lock(v);
   }
@@ -497,7 +496,7 @@ private:
         return listversion_.try_lock();
       } else if (!has_insert(item)) {
         // we only lock non-inserts (removes, updates) so as to make our 
-	// life harder (also it's not necessary for inserts).
+	    // life harder (also it's not necessary for inserts).
         return n->try_lock();
       }
       return true;

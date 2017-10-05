@@ -2,7 +2,7 @@
 #include "Transaction.hh"
 #include "rwlock.hh"
 
-#define N_THREADS 128
+#define MAX_NTHREADS 128
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2
 #define INVALID -1
@@ -10,17 +10,17 @@
 class ChoppedTransaction : public Sto {
 public:
     static void start_txn() {
-        Sto::start_transaction;
+        Sto::start_transaction();
     }
 
     static void end_txn() {
         auto txn = tinfos_[TThread::id()];
         // wait until txns of forward dep have committed to commit
         for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
-            auto pair : txn.forward_deps.back(); 
+            auto pair = txn.forward_deps.back(); 
             auto ftxn = pair.first;
             auto tnum = pair.second;
-            if (tnum = INVALID) {
+            if (tnum == INVALID) {
                 continue;
             }
             // we don't have to lock when we check these
@@ -44,33 +44,32 @@ public:
     }
  
     static void start_piece(int rank) {
-        PieceInfo* last_piece;
         auto tid = TThread::id();
         auto txn = tinfos_[tid];
        
         // enforce monotonic rank ordering
         if (!txn.pieces.empty()) {
             auto last_piece = txn.pieces.back();
-            assert(rank > last_piece.rank);
+            assert(rank > last_piece->rank);
         }
 
         // create new piece 
-        PieceInfo& pi = new PieceInfo(&txn, txn.txn_num, rank);
+        PieceInfo* pi = new PieceInfo(&txn, txn.txn_num, rank);
         txn.active_piece = pi;
         txn.pieces.push_back(pi);
 
         // wait until txns of forward dep have moved to or past this rank or committed
         for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
-            auto pair : txn.forward_deps.back(); 
+            auto pair = txn.forward_deps.back(); 
             auto ftxn = pair.first;
             auto tnum = pair.second;
-            if (tnum = INVALID) {
+            if (tnum == INVALID) {
                 continue;
             }
             // we don't have to lock when we check these
             // because ftxn can only ever become valid (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece && 
-                    && ftxn->active_piece->rank <= rank) {
+                    (ftxn->active_piece->rank <= rank)) {
                 ftxn->unlock();
                 sched_yield();
                 ftxn->lock();
@@ -90,7 +89,7 @@ public:
     static bool try_commit_current_piece() {
         auto txn = tinfos_[TThread::id()];
         auto piece = txn.active_piece;
-        auto rank = piece.rank;
+        auto rank = piece->rank;
 
         // ensure that no other transaction of the same rank can commit (and add deps)
         // so we know that we're checking all the possible pieces that we could have depended on
@@ -111,38 +110,37 @@ public:
 
         // check for new dependencies
         // iterate through each piece of the same rank in rankinfos_, check for overlaps in r/ws
-        for (int i = 0; i < N_THREADS; ++i) {
-            auto pi = rankinfos_[piece->rank][i];
+        for (int i = 0; i < MAX_NTHREADS; ++i) {
+            auto pi = rankinfos_[piece->rank].rank_pieces[i];
             // lock the owner txn. this means that the txn cannot abort / others cannot add 
             // backward dependencies while we might. 
             pi->owner->lock();
-            if (overlap(pi->write_keys, piece->write_keys)
-                    || overlap(pi->read_keys, piece->write_keys)
-                    || overlap(pi->write_keys, pi->read_keys)) {
+            if (overlap(pi, piece)) {
                 if (pi->owner->txn_num != pi->txn_num) {
                     if(pi->aborted) {
                         // the txn has already aborted but the piece has not yet been removed
                         // conservatively abort because we might have seen some of the piece changes
-                        piend->owner->unlock();
+                        pi->owner->unlock();
                         txn.abort();
                     } else {
                         // the txn committed
+                        pi->owner->unlock();
                         continue;
                     }
                 }
                 // the piece data is still for an active txn
                 // add dependency
-                pi->owner->backward_deps.push_back(make_pair(piece->owner, piece->txn_num));
-                txn->forward_deps.push_back(make_pair(pi->owner, pi->txn_num));
+                pi->owner->backward_deps.push_back(std::make_pair(piece->owner, piece->txn_num));
+                txn.forward_deps.push_back(std::make_pair(pi->owner, pi->txn_num));
                 pi->owner->unlock();
             }
+        }
+        // update the rankinfo for other txns to see our reads/writes
+        rankinfos_[rank].rank_pieces[TThread::id()] = piece;
+        rankinfos_[rank].unlock();
 
-            // update the rankinfo for other txns to see our reads/writes
-            rankinfo[rank][TThread::id()] = pi;
-            rankinfos_[rank].unlock();
-
-            return committed;
-        }    
+        return committed;
+    }
 
     static void commit_current_piece() {
         if (!try_commit_current_piece()) {
@@ -151,10 +149,48 @@ public:
     }
 
 private:
-    struct PieceInfo {
+    class TxnInfo;
+    class PieceInfo;
+    class RankInfo;
+
+    static bool overlap(PieceInfo* p1, PieceInfo* p2) {
+        // can make this more efficient with something like a bloom filter
+        void* key;
+        // read-write
+        for (unsigned i = 0; i < p2->nreads; ++i) {
+            key = p2->read_keys[i];
+            for (unsigned j = 0; j < p1->nwrites; ++j) {
+                if (key == p1->write_keys[j]) {
+                    return true;
+                }
+            }
+        }
+        // write-write
+        for (unsigned i = 0; i < p2->nwrites; ++i) {
+            key = p2->write_keys[i];
+            for (unsigned j = 0; j < p1->nwrites; ++j) {
+                if (key == p1->write_keys[j]) {
+                    return true;
+                }
+            }
+        }
+        // write-read
+        for (unsigned i = 0; i < p2->nwrites; ++i) {
+            key = p2->write_keys[i];
+            for (unsigned j = 0; j < p1->nreads; ++j) {
+                if (key == p1->read_keys[j]) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    class PieceInfo {
+    public:
+        TxnInfo* owner;
+        int txn_num;
         int rank;
-        TransInfo* owner;
-        unsigned txn_num;
         bool aborted;
 
         unsigned nreads;
@@ -165,22 +201,25 @@ private:
         unsigned nwrites;
         void** write_keys;
 
-        PieceInfo(TransInfo* newowner, unsigned newtnum, int newrank) : 
+        PieceInfo(TxnInfo* newowner, unsigned newtnum, int newrank) : 
             owner(newowner), txn_num(newtnum), rank(newrank) {
             aborted = false;
-            read_keys = writeset = write_keys = nwrites = nreads = 0;
+            read_keys = write_keys = nullptr;
+            writeset = nullptr;
+            nwrites = nreads = 0;
         }
-    }
+    };
 
-    struct TxnInfo {
+    class TxnInfo {
+    public:
         std::vector<PieceInfo*> pieces;
         PieceInfo* active_piece;
-        unsigned txn_num; // keeps track of 'which' txn we're executing
+        int txn_num; // keeps track of 'which' txn we're executing
         bool should_abort;
         rwlock txn_lk;
 
-        std::vector<std::pair<ThreadInfo*, unsigned>> forward_deps;
-        std::vector<std::pair<ThreadInfo*, unsigned>> backward_deps;
+        std::vector<std::pair<TxnInfo*, int>> forward_deps;
+        std::vector<std::pair<TxnInfo*, int>> backward_deps;
  
         TxnInfo() : active_piece(nullptr), txn_num(0), should_abort(false) {}
 
@@ -190,6 +229,7 @@ private:
                 pi->aborted = true; // XXX locking might be a bit off?
             }
             abort_dependent_txns();
+            // TODO actually abort the transaction
             end();
         }
 
@@ -206,14 +246,14 @@ private:
                     }
                 }
             }
-        }
+       }
 
         void end() {
             lock();
             for (auto piece : pieces) {
                 Transaction::rcu_free(piece->writeset);
-                Transaction::rcu_free(piece->readkeys);
-                Transaction::rcu_free(piece->writekeys);
+                Transaction::rcu_free(piece->read_keys);
+                Transaction::rcu_free(piece->write_keys);
                 Transaction::rcu_delete(piece);
             }
             pieces.clear();
@@ -234,23 +274,25 @@ private:
         void set_should_abort() {
             should_abort = true;
         }
-    }
+    };
 
-    struct RankInfo {
+    class RankInfo {
+    public:
         unsigned rank;
-        PieceInfo*[N_THREADS] rank_pieces;
+        PieceInfo* rank_pieces[MAX_NTHREADS];
         rwlock rank_lk;
 
-        RankInfo(unsigned my_rank) : rank(rank);
+        RankInfo(unsigned my_rank) : rank(my_rank) {};
         
         void lock() {
             rank_lk.write_lock();
         }
         void unlock() {
-            rank_unlock.write_unlock();
+            rank_lk.write_unlock();
         }
-    }
+    };
 
-    TxnInfo tinfos_[N_THREADS];
-    std::vector<RankInfo> rankinfos_;
+private:
+    static TxnInfo tinfos_[MAX_NTHREADS];
+    static std::vector<RankInfo> rankinfos_;
 };

@@ -503,10 +503,8 @@ bool Transaction::try_commit_piece(
     return true;
 
 abort:
-    // fence();
-    TXP_INCREMENT(txp_commit_time_aborts);
-    // we're aborting the entire transaction for now
-    stop(false, nullptr, 0);
+    // we should never abort
+    assert(0);
     return false;
 }
 
