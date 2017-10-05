@@ -28,7 +28,8 @@ void* run(void* x) {
 
     for (int i = 0; i < NTRANS; ++i) {
         while (1) {
-        Sto::start_transaction();
+        ChoppedTransaction::start_txn();
+        ChoppedTransaction::start_piece(0);
         try {
             int numOps = slotdist(transgen) % MAX_OPS + 1;
             int key = slotdist(transgen);
@@ -39,7 +40,7 @@ void* run(void* x) {
                 tester.doOp(op, me, key, val);
             }
 
-            if (Sto::try_commit()) {
+            if (ChoppedTransaction::try_commit_piece()) {
 #if PRINT_DEBUG
                 TransactionTid::lock(lock);
                 std::cout << "[" << me << "] committed " << numOps << " ops" 
@@ -52,6 +53,7 @@ void* run(void* x) {
                 TransactionTid::lock(lock); std::cout << "[" << me 
                     << "] aborted "<< std::endl; TransactionTid::unlock(lock);
 #endif
+                assert(0);
             }
         } catch (Transaction::Abort e) {
 #if PRINT_DEBUG
