@@ -14,26 +14,48 @@ public:
     }
 
     static void end_txn() {
-        tinfos_[TThread::id()].end();
+        auto txn = tinfos_[TThread::id()];
+        // wait until txns of forward dep have committed to commit
+        for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
+            auto pair : txn.forward_deps.back(); 
+            auto ftxn = pair.first;
+            auto tnum = pair.second;
+            if (tnum = INVALID) {
+                continue;
+            }
+            // we don't have to lock when we check these
+            // because ftxn can only ever become valid (a "monotonic" relation)
+            while (ftxn->txn_num == tnum && ftxn->active_piece) {
+                ftxn->unlock();
+                sched_yield();
+                ftxn->lock();
+            }
+            if (ftxn->txn_num != tnum) {
+                pair.second = INVALID;
+            }
+            ftxn->unlock();
+        }
+        // need to check if during our wait, we were told to abort
+        if (txn.should_abort) {
+            txn.abort();
+        } else {
+            txn.end();
+        }
     }
  
-    static void abort_txn() {
-        tinfos_[TThread::id()].abort();
-   }
-
     static void start_piece(int rank) {
         PieceInfo* last_piece;
         auto tid = TThread::id();
         auto txn = tinfos_[tid];
        
-        // enforce rank ordering
+        // enforce monotonic rank ordering
         if (!txn.pieces.empty()) {
             auto last_piece = txn.pieces.back();
             assert(rank > last_piece.rank);
         }
 
         // create new piece 
-        PieceInfo& pi = new PieceInfo(&txn, rank);
+        PieceInfo& pi = new PieceInfo(&txn, txn.txn_num, rank);
         txn.active_piece = pi;
         txn.pieces.push_back(pi);
 
@@ -58,6 +80,11 @@ public:
             }
             ftxn->unlock();
         }
+        
+        // check if we have been told to abort before we actually start executing the piece
+        if (txn.should_abort) {
+            txn.abort();
+        }
     }
 
     static bool try_commit_current_piece() {
@@ -78,8 +105,7 @@ public:
                     piece->nreads);
         if (!committed) {
             assert(0); // for now
-            txn.should_abort = true;
-            abort_txn();
+            rankinfos_[rank].unlock();
             return false;
         }
 
@@ -87,23 +113,34 @@ public:
         // iterate through each piece of the same rank in rankinfos_, check for overlaps in r/ws
         for (int i = 0; i < N_THREADS; ++i) {
             auto pi = rankinfos_[piece->rank][i];
+            // lock the owner txn. this means that the txn cannot abort / others cannot add 
+            // backward dependencies while we might. 
+            pi->owner->lock();
             if (overlap(pi->write_keys, piece->write_keys)
                     || overlap(pi->read_keys, piece->write_keys)
                     || overlap(pi->write_keys, pi->read_keys)) {
-                if (pi->aborted) {
-                    rankinfos_[rank].unlock()
-                    txn.set_should_abort();
-                    abort_txn();
-                    return false;
-                } 
-                piend->owner->lock();
-                piend->owner->backward_deps.push_back(piece->owner);
-                txn->forward_deps.push_back(piend->owner);
-                piend->owner->unlock();
+                if (pi->owner->txn_num != pi->txn_num) {
+                    if(pi->aborted) {
+                        // the txn has already aborted but the piece has not yet been removed
+                        // conservatively abort because we might have seen some of the piece changes
+                        piend->owner->unlock();
+                        txn.abort();
+                    } else {
+                        // the txn committed
+                        continue;
+                    }
+                }
+                // the piece data is still for an active txn
+                // add dependency
+                pi->owner->backward_deps.push_back(make_pair(piece->owner, piece->txn_num));
+                txn->forward_deps.push_back(make_pair(pi->owner, pi->txn_num));
+                pi->owner->unlock();
             }
-            rankinfo[rank][TThread::id()] = pi;
 
+            // update the rankinfo for other txns to see our reads/writes
+            rankinfo[rank][TThread::id()] = pi;
             rankinfos_[rank].unlock();
+
             return committed;
         }    
 
@@ -114,16 +151,10 @@ public:
     }
 
 private:
-   void abort_piece(PieceInfo* pi) {
-        pi->set_aborted();
-        // anyone who started during or before the abort has
-        // an old pointer to pi and will see the aborted flag set
-        Transaction::rcu_free pi;
-    }
-    
     struct PieceInfo {
         int rank;
         TransInfo* owner;
+        unsigned txn_num;
         bool aborted;
 
         unsigned nreads;
@@ -134,15 +165,10 @@ private:
         unsigned nwrites;
         void** write_keys;
 
-        PieceInfo(TransInfo* newowner, int newrank) : owner(newowner), rank(newrank) {
+        PieceInfo(TransInfo* newowner, unsigned newtnum, int newrank) : 
+            owner(newowner), txn_num(newtnum), rank(newrank) {
             aborted = false;
             read_keys = writeset = write_keys = nwrites = nreads = 0;
-            forward_deps.clear();
-            take_rankinfo_snapshot();
-        }
-
-        void set_aborted() {
-            aborted = true;
         }
     }
 
@@ -157,6 +183,30 @@ private:
         std::vector<std::pair<ThreadInfo*, unsigned>> backward_deps;
  
         TxnInfo() : active_piece(nullptr), txn_num(0), should_abort(false) {}
+
+        void abort() {
+            assert(should_abort);
+            for (auto pi : pieces) {
+                pi->aborted = true; // XXX locking might be a bit off?
+            }
+            abort_dependent_txns();
+            end();
+        }
+
+        void abort_dependent_txns() {
+            // abort anyone who's dependent and who hasn't aborted yet
+            for (auto& pair : backward_deps) {
+                if (pair.second != INVALID) {
+                    auto txn = pair.first;
+                    bool same_txn = (txn->txn_num == pair.second);
+                    if (same_txn) {
+                        txn->set_should_abort();
+                    } else {
+                        pair.second = INVALID;
+                    }
+                }
+            }
+        }
 
         void end() {
             lock();
@@ -183,38 +233,6 @@ private:
         }
         void set_should_abort() {
             should_abort = true;
-        }
-
-        // we don't need to lock around this because no one
-        // will be trying to add dependencies to us (should_abort
-        // is set)
-        void abort() {
-            assert(should_abort);
-            for (auto pi : pieces) {
-                abort_piece(pi);
-            }
-            abort_dependent_txns();
-            reset();
-        }
-
-        // need to lock around this
-        // no deadlock because those txns aren't lock when they're adding 
-        // backward deps
-        void abort_dependent_txns() {
-            // abort anyone who's dependent and who hasn't aborted yet
-            for (auto& pair : backward_deps) {
-                if (pair.second != INVALID) {
-                    auto txn = pair.first;
-                    txn->lock();
-                    bool same_txn = (txn->txn_num == pair.second);
-                    if (same_txn) {
-                        txn->set_should_abort();
-                    } else {
-                        pair.second = INVALID;
-                    }
-                    txn->unlock();
-                }
-            }
         }
     }
 
