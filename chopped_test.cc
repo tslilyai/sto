@@ -6,14 +6,17 @@
 #include <map>
 #include <sys/time.h>
 #include "ChoppedTransaction.hh"
-#include "ListTester.hh"
+#include "Transaction.hh"
+#include "VectorTester.hh"
 
 #define PRINT_DEBUG 0
-#define NTRANS 1000 
-#define MAX_OPS 10 
+#define NTRANS 100 
+#define MAX_OPS 5 
+#define MAX_VALUE 10 // Max value of integers used in data structures
+#define N_THREADS 2
 
 unsigned initial_seeds[64];
-ListTester<int> tester;
+VectorTester<int> tester;
 
 template <typename T>
 void* run(void* x) {
@@ -28,10 +31,12 @@ void* run(void* x) {
         Sto::start_transaction();
         try {
             int numOps = slotdist(transgen) % MAX_OPS + 1;
+            int key = slotdist(transgen);
             int val = slotdist(transgen);
             
             for (int j = 0; j < numOps; j++) {
                 int op = slotdist(transgen) % tester.num_ops_;
+                tester.doOp(op, me, key, val);
             }
 
             if (Sto::try_commit()) {

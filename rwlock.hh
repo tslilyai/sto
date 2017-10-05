@@ -1,3 +1,4 @@
+#pragma once
 #include "compiler.hh"
 
 class rwlock {
