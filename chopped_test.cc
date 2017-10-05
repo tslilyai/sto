@@ -13,13 +13,60 @@
 #define NTRANS 100 
 #define MAX_OPS 5 
 #define MAX_VALUE 10 // Max value of integers used in data structures
-#define N_THREADS 2
+#define N_THREADS 1
 
 unsigned initial_seeds[64];
 VectorTester<int> tester;
 
 template <typename T>
-void* run(void* x) {
+void* run_whole(void* x) {
+    int me = *((int*) x);
+    TThread::set_id(me);
+   
+    Rand transgen(initial_seeds[2*me], initial_seeds[2*me + 1]);
+    std::uniform_int_distribution<long> slotdist(0, MAX_VALUE);
+
+    for (int i = 0; i < NTRANS; ++i) {
+        while (1) {
+        Sto::start_transaction();
+        try {
+            int numOps = slotdist(transgen) % MAX_OPS + 1;
+            int key = slotdist(transgen);
+            int val = slotdist(transgen);
+            
+            for (int j = 0; j < numOps; j++) {
+                int op = slotdist(transgen) % tester.num_ops_;
+                tester.doOp(op, me, key, val);
+            }
+
+            if (Sto::try_commit()) {
+#if PRINT_DEBUG
+                TransactionTid::lock(lock);
+                std::cout << "[" << me << "] committed " << numOps << " ops" 
+                    << Sto::commit_tid() << std::endl;
+                TransactionTid::unlock(lock);
+#endif
+                break;
+            } else {
+#if PRINT_DEBUG
+                TransactionTid::lock(lock); std::cout << "[" << me 
+                    << "] aborted "<< std::endl; TransactionTid::unlock(lock);
+#endif
+                assert(0);
+            }
+        } catch (Transaction::Abort e) {
+#if PRINT_DEBUG
+            TransactionTid::lock(lock); std::cout << "[" << me 
+                << "] aborted "<< std::endl; TransactionTid::unlock(lock);
+#endif
+        }
+        }
+    }
+    return NULL;
+}
+
+template <typename T>
+void* run_chopped(void* x) {
     int me = *((int*) x);
     TThread::set_id(me);
    
@@ -47,6 +94,7 @@ void* run(void* x) {
                     << Sto::commit_tid() << std::endl;
                 TransactionTid::unlock(lock);
 #endif
+                ChoppedTransaction::end_txn();
                 break;
             } else {
 #if PRINT_DEBUG
@@ -67,17 +115,28 @@ void* run(void* x) {
 }
 
 template <typename T>
-void startAndWait() {
+void startAndWaitChopped() {
     pthread_t tids[N_THREADS];
     T tiddata[N_THREADS];
     for (int i = 0; i < N_THREADS; ++i) {
         tiddata[i] = i;
-        pthread_create(&tids[i], NULL, run<T>, &tiddata[i]);
+        pthread_create(&tids[i], NULL, run_chopped<T>, &tiddata[i]);
     }
-    pthread_t advancer;
-    pthread_create(&advancer, NULL, Transaction::epoch_advancer, NULL);
-    pthread_detach(advancer);
     
+    for (int i = 0; i < N_THREADS; ++i) {
+        pthread_join(tids[i], NULL);
+    }
+}
+
+template <typename T>
+void startAndWaitWhole() {
+    pthread_t tids[N_THREADS];
+    T tiddata[N_THREADS];
+    for (int i = 0; i < N_THREADS; ++i) {
+        tiddata[i] = i;
+        pthread_create(&tids[i], NULL, run_whole<T>, &tiddata[i]);
+    }
+   
     for (int i = 0; i < N_THREADS; ++i) {
         pthread_join(tids[i], NULL);
     }
@@ -94,10 +153,23 @@ int main() {
 
     tester.init();
 
+    pthread_t advancer;
+    pthread_create(&advancer, NULL, Transaction::epoch_advancer, NULL);
+    pthread_detach(advancer);
+ 
     struct timeval tv1,tv2;
     gettimeofday(&tv1, NULL);
     
-    startAndWait<int>();
+    startAndWaitChopped<int>();
+    
+    gettimeofday(&tv2, NULL);
+    printf("Chopped time: ");
+    print_time(tv1, tv2);
+    
+
+    gettimeofday(&tv1, NULL);
+    
+    startAndWaitWhole<int>();
     
     gettimeofday(&tv2, NULL);
     printf("Parallel time: ");
