@@ -182,6 +182,11 @@ class TransItem {
         return *this;
     }
 
+    /* CHOPPING */
+    void* get_void_key() {
+        return key_;
+    }
+
 private:
     ownerstore_type s_;
     // this word must be unique (to a particular item) and consistently ordered across transactions

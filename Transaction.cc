@@ -278,7 +278,7 @@ bool Transaction::try_commit() {
             }
         }
     }
-
+    
     first_write_ = writeset[0];
 
     //phase1
@@ -364,16 +364,12 @@ abort:
     return false;
 }
 
+/* CHOPPING */
 bool Transaction::try_commit_piece(
-        unsigned*& my_writeset,
-        unsigned*& my_readset,
-        void**& my_writekeys,
-        void**& my_readkeys,
-        unsigned& my_nwrites,
-        unsigned& my_nreads) {
-#if STO_TSC_PROFILE
-    TimeKeeper<tc_commit> tk;
-#endif
+        unsigned*& writeset, 
+        void**& writekeys, void**& readkeys,
+        unsigned& nwriteset, unsigned& nreadset) 
+{
     assert(TThread::id() == threadid_);
 #if ASSERT_TX_SIZE
     if (tset_size_ > TX_SIZE_LIMIT) {
@@ -382,37 +378,28 @@ bool Transaction::try_commit_piece(
         assert(false);
     }
 #endif
-    TXP_ACCOUNT(txp_max_set, tset_size_);
-    TXP_ACCOUNT(txp_total_n, tset_size_);
-
-    assert(state_ == s_in_progress || state_ >= s_aborted);
-    if (state_ >= s_aborted)
-        return state_ > s_aborted;
-
+    assert(state_ == s_in_progress);
+    
     if (any_nonopaque_)
         TXP_INCREMENT(txp_commit_time_nonopaque);
-#if !CONSISTENCY_CHECK
-    // commit immediately if read-only transaction with opacity
-    if (!any_writes_ && !any_nonopaque_) {
-        stop(true, nullptr, 0);
-        return true;
-    }
-#endif
 
-    state_ = s_committing;
-
-    unsigned writeset[tset_size_];
-    unsigned nwriteset = 0;
+    size_t sz = tset_size_ - tset_piece_begin_;
+    writeset = (unsigned*) malloc(sizeof(unsigned)*sz); 
+    writekeys = (void**) malloc(sizeof(unsigned)*sz); 
+    readkeys = (void**) malloc(sizeof(unsigned)*sz); 
+    assert (writeset && writekeys && readkeys);
+    nwriteset = nreadset = 0;
     writeset[0] = tset_size_;
 
     TransItem* it = nullptr;
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         if (it->has_write()) {
+            writekeys[nwriteset] = it->get_void_key();
             writeset[nwriteset++] = tidx;
 #if !STO_SORT_WRITESET
             if (nwriteset == 1) {
-                first_write_ = writeset[0];
+                first_piece_write_ = writeset[0];
                 state_ = s_committing_locked;
             }
             if (!it->owner()->lock(*it, *this)) {
@@ -422,9 +409,13 @@ bool Transaction::try_commit_piece(
             it->__or_flags(TransItem::lock_bit);
 #endif
         }
-        if (it->has_read())
+        if (it->has_read()) {
             TXP_INCREMENT(txp_total_r);
+            readkeys[nreadset++] = it->get_void_key();
+        } 
         else if (it->has_predicate()) {
+            // treat predicates like reads
+            readkeys[nreadset++] = it->get_void_key();
             TXP_INCREMENT(txp_total_check_predicate);
             if (!it->owner()->check_predicate(*it, *this, true)) {
                 mark_abort_because(it, "commit check_predicate");
@@ -433,7 +424,19 @@ bool Transaction::try_commit_piece(
         }
     }
 
-    first_write_ = writeset[0];
+    if (tset_piece_begin_ == 0) {
+        // set the first write for aborting the entire txn
+        first_write_ = writeset[0];
+    }
+    // this is to commit (or to abort) a piece
+    first_piece_write_ = writeset[0];
+
+    /* 
+     * CHOPPING COMMENT
+     * The following is the same as the traditional STO commit protocol, 
+     * except we only commit those items from tset_piece_begin_ to tset_size_
+     * and we return the state to s_in_progress after finishing the commit
+     */
 
     //phase1
 #if STO_SORT_WRITESET
@@ -459,7 +462,7 @@ bool Transaction::try_commit_piece(
 #endif
 
     //phase2
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
         it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         if (it->has_read()) {
             TXP_INCREMENT(txp_total_check_read);
@@ -475,7 +478,7 @@ bool Transaction::try_commit_piece(
 
     //phase3
 #if STO_SORT_WRITESET
-    for (unsigned tidx = first_write_; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = first_piece_write_; tidx != tset_size_; ++tidx) {
         it = &tset_[tidx / tset_chunk][tidx % tset_chunk];
         if (it->has_write()) {
             TXP_INCREMENT(txp_total_w);
@@ -497,19 +500,66 @@ bool Transaction::try_commit_piece(
 #endif
 
     // fence();
-    stop(true, writeset, nwriteset);
+    finish_commit_piece(writeset, nwriteset);
     return true;
 
 abort:
     // fence();
     TXP_INCREMENT(txp_commit_time_aborts);
+    // we're aborting the entire transaction, so this is fine
     stop(false, nullptr, 0);
-#if STO_TSC_PROFILE
-    auto endtime = read_tsc();
-    TSC_ACCOUNT(tc_commit_wasted, endtime - tk.init_tsc_val());
-#endif
     return false;
 }
+
+void Transaction::finish_commit_piece(unsigned* writeset, unsigned nwriteset) {
+    TXP_ACCOUNT(txp_max_transbuffer, buf_.buffer_size());
+    TXP_ACCOUNT(txp_total_transbuffer, buf_.buffer_size());
+
+    TransItem* it;
+    if (!any_writes_)
+        goto after_unlock;
+
+    if (!STO_SORT_WRITESET) {
+        for (unsigned* idxit = writeset + nwriteset; idxit != writeset; ) {
+            --idxit;
+            if (*idxit < tset_initial_capacity)
+                it = &tset0_[*idxit];
+            else
+                it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
+            if (it->needs_unlock())
+                it->owner()->unlock(*it);
+        }
+        for (unsigned* idxit = writeset + nwriteset; idxit != writeset; ) {
+            --idxit;
+            if (*idxit < tset_initial_capacity)
+                it = &tset0_[*idxit];
+            else
+                it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
+            if (it->has_write()) // always true unless a user turns it off in install()/check()
+                it->owner()->cleanup(*it, true);
+        } 
+    } else {
+        if (state_ == s_committing_locked) {
+            it = &tset_[tset_size_ / tset_chunk][tset_size_ % tset_chunk];
+            for (unsigned tidx = tset_size_; tidx != first_piece_write_; --tidx) {
+                it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
+                if (it->needs_unlock())
+                    it->owner()->unlock(*it);
+            }
+        }
+        it = &tset_[tset_size_ / tset_chunk][tset_size_ % tset_chunk];
+        for (unsigned tidx = tset_size_; tidx != first_piece_write_; --tidx) {
+            it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
+            if (it->has_write())
+                it->owner()->cleanup(*it, true);
+        }
+    }
+
+after_unlock:
+    tset_piece_begin_ = tset_size_;
+    state_ = s_in_progress;
+}
+/* END CHOPPING */
 
 void Transaction::print_stats() {
     txp_counters out = txp_counters_combined();

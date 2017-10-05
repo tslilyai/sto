@@ -165,7 +165,6 @@ private:
         TransInfo* owner;
         bool aborted;
 
-        unsigned* readset;
         unsigned nreads;
         void** read_keys;
 
@@ -224,7 +223,10 @@ private:
         // txn must be locked
         void reset() {
             for (auto piece : pieces) {
-                Transaction::rcu_free(piece);
+                Transaction::rcu_free(piece->writeset);
+                Transaction::rcu_free(piece->readkeys);
+                Transaction::rcu_free(piece->writekeys);
+                Transaction::rcu_delete(piece);
             }
             pieces.clear();
             forward_deps.clear();
