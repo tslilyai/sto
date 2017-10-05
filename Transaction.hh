@@ -606,6 +606,16 @@ public:
         return state_ < s_aborted;
     }
 
+    /* FOR CHOPPING */
+    void undo_piece(unsigned* writes, unsigned nwrites);
+    bool try_commit_piece(
+            unsigned*& writeset,
+            unsigned*& readset,
+            void**& writekeys,
+            void**& readkeys
+            unsigned& nwrites,
+            unsigned& nreads);
+
     // opacity checking
     // These function will eventually help us track the commit TID when we
     // have no opacity, or for GV7 opacity.
@@ -767,7 +777,7 @@ private:
 
     void hard_check_opacity(TransItem* item, TransactionTid::type t);
     void stop(bool committed, unsigned* writes, unsigned nwrites);
-
+    
     friend class TransProxy;
     friend class TransItem;
     friend class Sto;
@@ -811,7 +821,6 @@ public:
     static bool in_progress() {
         return TThread::txn && TThread::txn->in_progress();
     }
-
     static void abort() {
         always_assert(in_progress());
         TThread::txn->abort();
@@ -884,6 +893,25 @@ public:
         // XXX: we might want a nonopaque_bit in here too.
         return TransactionTid::increment_value;
     }
+
+    /* ADDED FOR CHOPPING */
+    static bool try_commit_piece(
+            unsigned*& writeset,
+            unsigned*& readset,
+            void**& writekeys,
+            void**& readkeys
+            unsigned& nwrites,
+            unsigned& nreads) {
+        always_assert(in_progress());
+        return TThread::txn->try_commit_piece(
+                unsigned*& writeset,
+                unsigned*& readset,
+                void**& writekeys,
+                void**& readkeys
+                unsigned& nwrites,
+                unsigned& nreads);
+    }
+    /* END CHOPPING */
 };
 
 class TestTransaction {
