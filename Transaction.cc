@@ -364,6 +364,153 @@ abort:
     return false;
 }
 
+bool Transaction::try_commit_piece(
+        unsigned*& my_writeset,
+        unsigned*& my_readset,
+        void**& my_writekeys,
+        void**& my_readkeys,
+        unsigned& my_nwrites,
+        unsigned& my_nreads) {
+#if STO_TSC_PROFILE
+    TimeKeeper<tc_commit> tk;
+#endif
+    assert(TThread::id() == threadid_);
+#if ASSERT_TX_SIZE
+    if (tset_size_ > TX_SIZE_LIMIT) {
+        std::cerr << "transSet_ size at " << tset_size_
+            << ", abort." << std::endl;
+        assert(false);
+    }
+#endif
+    TXP_ACCOUNT(txp_max_set, tset_size_);
+    TXP_ACCOUNT(txp_total_n, tset_size_);
+
+    assert(state_ == s_in_progress || state_ >= s_aborted);
+    if (state_ >= s_aborted)
+        return state_ > s_aborted;
+
+    if (any_nonopaque_)
+        TXP_INCREMENT(txp_commit_time_nonopaque);
+#if !CONSISTENCY_CHECK
+    // commit immediately if read-only transaction with opacity
+    if (!any_writes_ && !any_nonopaque_) {
+        stop(true, nullptr, 0);
+        return true;
+    }
+#endif
+
+    state_ = s_committing;
+
+    unsigned writeset[tset_size_];
+    unsigned nwriteset = 0;
+    writeset[0] = tset_size_;
+
+    TransItem* it = nullptr;
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+        it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
+        if (it->has_write()) {
+            writeset[nwriteset++] = tidx;
+#if !STO_SORT_WRITESET
+            if (nwriteset == 1) {
+                first_write_ = writeset[0];
+                state_ = s_committing_locked;
+            }
+            if (!it->owner()->lock(*it, *this)) {
+                mark_abort_because(it, "commit lock");
+                goto abort;
+            }
+            it->__or_flags(TransItem::lock_bit);
+#endif
+        }
+        if (it->has_read())
+            TXP_INCREMENT(txp_total_r);
+        else if (it->has_predicate()) {
+            TXP_INCREMENT(txp_total_check_predicate);
+            if (!it->owner()->check_predicate(*it, *this, true)) {
+                mark_abort_because(it, "commit check_predicate");
+                goto abort;
+            }
+        }
+    }
+
+    first_write_ = writeset[0];
+
+    //phase1
+#if STO_SORT_WRITESET
+    std::sort(writeset, writeset + nwriteset, [&] (unsigned i, unsigned j) {
+        TransItem* ti = &tset_[i / tset_chunk][i % tset_chunk];
+        TransItem* tj = &tset_[j / tset_chunk][j % tset_chunk];
+        return *ti < *tj;
+    });
+
+    if (nwriteset) {
+        state_ = s_committing_locked;
+        auto writeset_end = writeset + nwriteset;
+        for (auto it = writeset; it != writeset_end; ) {
+            TransItem* me = &tset_[*it / tset_chunk][*it % tset_chunk];
+            if (!me->owner()->lock(*me, *this)) {
+                mark_abort_because(me, "commit lock");
+                goto abort;
+            }
+            me->__or_flags(TransItem::lock_bit);
+            ++it;
+        }
+    }
+#endif
+
+    //phase2
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
+        it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
+        if (it->has_read()) {
+            TXP_INCREMENT(txp_total_check_read);
+            if (!it->owner()->check(*it, *this)
+                && (!may_duplicate_items_ || !preceding_duplicate_read(it))) {
+                mark_abort_because(it, "commit check");
+                goto abort;
+            }
+        }
+    }
+
+    // fence();
+
+    //phase3
+#if STO_SORT_WRITESET
+    for (unsigned tidx = first_write_; tidx != tset_size_; ++tidx) {
+        it = &tset_[tidx / tset_chunk][tidx % tset_chunk];
+        if (it->has_write()) {
+            TXP_INCREMENT(txp_total_w);
+            it->owner()->install(*it, *this);
+        }
+    }
+#else
+    if (nwriteset) {
+        auto writeset_end = writeset + nwriteset;
+        for (auto idxit = writeset; idxit != writeset_end; ++idxit) {
+            if (likely(*idxit < tset_initial_capacity))
+                it = &tset0_[*idxit];
+            else
+                it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
+            TXP_INCREMENT(txp_total_w);
+            it->owner()->install(*it, *this);
+        }
+    }
+#endif
+
+    // fence();
+    stop(true, writeset, nwriteset);
+    return true;
+
+abort:
+    // fence();
+    TXP_INCREMENT(txp_commit_time_aborts);
+    stop(false, nullptr, 0);
+#if STO_TSC_PROFILE
+    auto endtime = read_tsc();
+    TSC_ACCOUNT(tc_commit_wasted, endtime - tk.init_tsc_val());
+#endif
+    return false;
+}
+
 void Transaction::print_stats() {
     txp_counters out = txp_counters_combined();
     if (txp_count >= txp_max_set) {

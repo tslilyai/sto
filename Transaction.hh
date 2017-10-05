@@ -607,14 +607,10 @@ public:
     }
 
     /* FOR CHOPPING */
-    void undo_piece(unsigned* writes, unsigned nwrites);
-    bool try_commit_piece(
-            unsigned*& writeset,
-            unsigned*& readset,
-            void**& writekeys,
-            void**& readkeys
-            unsigned& nwrites,
-            unsigned& nreads);
+    bool try_commit_piece(unsigned*& writeset, unsigned*& readset,
+            void**& writekeys, void**& readkeys,
+            unsigned& nwrites,  unsigned& nreads);
+    /* END CHOPPING */
 
     // opacity checking
     // These function will eventually help us track the commit TID when we
@@ -895,21 +891,13 @@ public:
     }
 
     /* ADDED FOR CHOPPING */
-    static bool try_commit_piece(
-            unsigned*& writeset,
-            unsigned*& readset,
-            void**& writekeys,
-            void**& readkeys
-            unsigned& nwrites,
-            unsigned& nreads) {
+    static bool try_commit_piece(unsigned*& writeset, unsigned*& readset,
+                void**& writekeys, void**& readkeys,
+                unsigned& nwrites, unsigned& nreads) 
+    {
         always_assert(in_progress());
-        return TThread::txn->try_commit_piece(
-                unsigned*& writeset,
-                unsigned*& readset,
-                void**& writekeys,
-                void**& readkeys
-                unsigned& nwrites,
-                unsigned& nreads);
+        return TThread::txn->try_commit_piece(writeset, readset,
+                writekeys, readkeys, nwrites, nreads);
     }
     /* END CHOPPING */
 };

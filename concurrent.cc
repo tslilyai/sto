@@ -91,16 +91,6 @@
 //kvepoch_t global_log_epoch = 0;
 //kvtimestamp_t initial_timestamp;
 
-#ifdef BOOSTING
-#ifdef BOOSTING_STANDALONE
-#include "Boosting_standalone.hh"
-#else
-#include "Boosting_sto.hh"
-TransPessimisticLocking __pessimistLocking;
-#endif
-#include "Boosting_map.hh"
-#endif
-
 //#define DEBUG
 #ifdef DEBUG
 #define debug(...) printf(__VA_ARGS__)
@@ -361,11 +351,7 @@ private:
 };
 
 template <> struct Container<USE_HASHTABLE> {
-#ifndef BOOSTING
     typedef Hashtable<int, value_type, true, static_cast<unsigned>(ARRAY_SZ/HASHTABLE_LOAD_FACTOR)> type;
-#else
-    typedef TransMap<int, value_type, static_cast<unsigned>(ARRAY_SZ/HASHTABLE_LOAD_FACTOR)> type;
-#endif
     typedef int index_type;
     static constexpr bool has_delete = true;
     value_type nontrans_get(index_type key) {
@@ -998,9 +984,6 @@ template <int DS> template <bool do_delete>
 void RandomRWs_parent<DS>::do_run(int me) {
   TThread::set_id(me);
   Sto::update_threadid();
-#ifdef BOOSTING_STANDALONE
-  boosting_threadid = me;
-#endif
   container_type* a = this->a;
   container_type::thread_init(*a);
 
@@ -1205,9 +1188,6 @@ template <int DS> struct XorDelete<DS, true> : public DSTester<DS> {
 template <int DS> void XorDelete<DS, true>::run(int me) {
   TThread::set_id(me);
   Sto::update_threadid();
-#ifdef BOOSTING_STANDALONE
-  boosting_threadid = me;
-#endif
   container_type* a = this->a;
   container_type::thread_init(*a);
 
