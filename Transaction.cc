@@ -385,9 +385,9 @@ bool Transaction::try_commit_piece(
 
     size_t sz = tset_size_ - tset_piece_begin_;
     writeset = (unsigned*) malloc(sizeof(unsigned)*sz); 
-    writekeys = (void**) malloc(sizeof(unsigned)*sz); 
-    readkeys = (void**) malloc(sizeof(unsigned)*sz); 
-    assert (writeset && writekeys && readkeys);
+    writekeys = (void**) malloc(sizeof(void*)*sz); 
+    readkeys = (void**) malloc(sizeof(void*)*sz); 
+    assert(writeset && writekeys && readkeys);
     nwriteset = nreadset = 0;
     writeset[0] = tset_size_;
 
@@ -428,11 +428,10 @@ bool Transaction::try_commit_piece(
         // set the first write for aborting the entire txn
         first_write_ = writeset[0];
     }
-    // this is to commit (or to abort) a piece
+    // this is to know the first write to commit for this piece
     first_piece_write_ = writeset[0];
 
     /* 
-     * CHOPPING COMMENT
      * The following is the same as the traditional STO commit protocol, 
      * except we only commit those items from tset_piece_begin_ to tset_size_
      * and we return the state to s_in_progress after finishing the commit
@@ -506,7 +505,7 @@ bool Transaction::try_commit_piece(
 abort:
     // fence();
     TXP_INCREMENT(txp_commit_time_aborts);
-    // we're aborting the entire transaction, so this is fine
+    // we're aborting the entire transaction for now
     stop(false, nullptr, 0);
     return false;
 }

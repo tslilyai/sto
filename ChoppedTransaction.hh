@@ -7,23 +7,18 @@
 #define COMMITTED_STATE 2
 #define INVALID -1
 
-class StoWrapper : public Sto {
+class ChoppedTransaction : public Sto {
 public:
     static void start_txn() {
         Sto::start_transaction;
-        auto tid = TThread::id();
     }
 
     static void end_txn() {
-        auto txn = tinfos_[TThread::id()]
-        txn->lock();
-        reset();
-        txn->unlock();
+        tinfos_[TThread::id()].end();
     }
  
     static void abort_txn() {
-        auto txn = tinfos_[TThread::id()];
-        txn.abort();
+        tinfos_[TThread::id()].abort();
    }
 
     static void start_piece(int rank) {
@@ -31,9 +26,6 @@ public:
         auto tid = TThread::id();
         auto txn = tinfos_[tid];
        
-        // ensure that the txn can't abort while we start
-        txn.lock();
-
         // enforce rank ordering
         if (!txn.pieces.empty()) {
             auto last_piece = txn.pieces.back();
@@ -42,7 +34,6 @@ public:
 
         // create new piece 
         PieceInfo& pi = new PieceInfo(&txn, rank);
-        rankinfo[rank][TThread::id()] = pi;
         txn.active_piece = pi;
         txn.pieces.push_back(pi);
 
@@ -54,11 +45,10 @@ public:
             if (tnum = INVALID) {
                 continue;
             }
-            // because there are no dependency cycles, we can lock here!
-            ftxn->lock();
-            // XXX not sure if this is the right way to block...
+            // we don't have to lock when we check these
+            // because ftxn can only ever become valid (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece && 
-                    && ftxn->active_piece->rank < rank) {
+                    && ftxn->active_piece->rank <= rank) {
                 ftxn->unlock();
                 sched_yield();
                 ftxn->lock();
@@ -73,21 +63,21 @@ public:
     static bool try_commit_current_piece() {
         auto txn = tinfos_[TThread::id()];
         auto piece = txn.active_piece;
-        // lock piece to prevent someone from missing a dependency
-        piece->wlock();
+        auto rank = piece.rank;
+
+        // ensure that no other transaction of the same rank can commit (and add deps)
+        // so we know that we're checking all the possible pieces that we could have depended on
+        rankinfos_[rank].lock();
         
-        // TODO implement this...
         // this updates the piece info with the relevant info
         bool committed = Sto::try_commit_piece(
                     piece->writeset, 
-                    piece->readset, 
                     piece->write_keys, 
                     piece->read_keys,
                     piece->nwrites, 
                     piece->nreads);
-        // safe to unlock here because r/w sets have been set 
-        piece->wunlock();
         if (!committed) {
+            assert(0); // for now
             txn.should_abort = true;
             abort_txn();
             return false;
@@ -96,51 +86,24 @@ public:
         // check for new dependencies
         // iterate through each piece of the same rank in rankinfos_, check for overlaps in r/ws
         for (int i = 0; i < N_THREADS; ++i) {
-            auto pibegin = rankinfo_snapshot[i];
-            auto pinow = rankinfos_[piece->rank][i];
-
-            // this piece was replaced, so either the txn committed or aborted
-            // check if it had aborted, and if so, if we need to abort
-            // this is slightly conservative because the undo might have happened
-            // before we ran 
-            if (pibegin != pinow) {
-                if (pibegin->aborted) {
-                    if (overlap(pibegin->write_keys, piece->write_keys)
-                            || overlap(pibegin->read_keys, piece->write_keys)
-                            || overlap(pibegin->write_keys, pibegin->read_keys)) {
-                        txn.set_should_abort();
-                        abort_txn();
-                        return false;
-                    }
-                }
-            }
-
-            // the pieces are the same. so we know that the piece has not
-            // yet aborted. but it could abort after we lock it, so check anyway
-            piend->rlock();
-            if (overlap(piend->write_keys, piece->write_keys)
-                    || overlap(piend->read_keys, piece->write_keys)
-                    || overlap(piend->write_keys, piend->read_keys)) {
-                if (piend->aborted) {
-                    piend->runlock();
+            auto pi = rankinfos_[piece->rank][i];
+            if (overlap(pi->write_keys, piece->write_keys)
+                    || overlap(pi->read_keys, piece->write_keys)
+                    || overlap(pi->write_keys, pi->read_keys)) {
+                if (pi->aborted) {
+                    rankinfos_[rank].unlock()
                     txn.set_should_abort();
                     abort_txn();
                     return false;
                 } 
                 piend->owner->lock();
-                if (!piend->owner->should_abort) {
-                    piend->owner->backward_deps.push_back(piece->owner);
-                    txn->forward_deps.push_back(piend->owner);
-                } else {
-                    txn.set_should_abort();
-                    abort_txn();
-                    return false;
-                }
+                piend->owner->backward_deps.push_back(piece->owner);
+                txn->forward_deps.push_back(piend->owner);
                 piend->owner->unlock();
-                piend->runlock();
-                return true;
             }
-            active_piece->aborted = !committed; 
+            rankinfo[rank][TThread::id()] = pi;
+
+            rankinfos_[rank].unlock();
             return committed;
         }    
 
@@ -153,8 +116,6 @@ public:
 private:
    void abort_piece(PieceInfo* pi) {
         pi->set_aborted();
-        // TODO implement this
-        Sto::abort_piece(pi->writeset, pi->nwrites);
         // anyone who started during or before the abort has
         // an old pointer to pi and will see the aborted flag set
         Transaction::rcu_free pi;
@@ -167,51 +128,28 @@ private:
 
         unsigned nreads;
         void** read_keys;
-
+        // technically we don't need this because we're
+        // not aborting pieces, but instead aborting txns
         unsigned* writeset;
         unsigned nwrites;
         void** write_keys;
 
-        rwlock piece_rwlk;
-        PieceInfo*[N_THREADS] rankinfo_snapshot;
-
         PieceInfo(TransInfo* newowner, int newrank) : owner(newowner), rank(newrank) {
             aborted = false;
-            readset = read_keys = writeset = write_keys = nwrites = nreads = 0;
+            read_keys = writeset = write_keys = nwrites = nreads = 0;
             forward_deps.clear();
             take_rankinfo_snapshot();
         }
 
-        void take_rankinfo_snapshot() {
-            // XXX do we need to synchronize this? we're just using it to ensure
-            // that a txn's piece doesn't abort and restart while we're executing
-            memmove(rankinfos_[rank], rankinfo_snapshot, N_THREADS*sizeof(PieceInfo*));
-        }
-
         void set_aborted() {
-            wlock();
             aborted = true;
-            wunlock();
-        }
-        
-        void rlock() {
-            piece_rwlk.read_lock();
-        }
-        void wlock() {
-            piece_rwlk.write_lock();
-        }
-        void runlock() {
-            piece_rwlk.read_unlock();
-        }
-        void wunlock() {
-            piece_rwlk.write_unlock();
         }
     }
 
     struct TxnInfo {
         std::vector<PieceInfo*> pieces;
         PieceInfo* active_piece;
-        unsigned txn_num;
+        unsigned txn_num; // keeps track of 'which' txn we're executing
         bool should_abort;
         rwlock txn_lk;
 
@@ -220,8 +158,8 @@ private:
  
         TxnInfo() : active_piece(nullptr), txn_num(0), should_abort(false) {}
 
-        // txn must be locked
-        void reset() {
+        void end() {
+            lock();
             for (auto piece : pieces) {
                 Transaction::rcu_free(piece->writeset);
                 Transaction::rcu_free(piece->readkeys);
@@ -234,6 +172,7 @@ private:
             active_piece = nullptr; 
             should_abort = false;
             txn_num++;
+            unlock();
         }
 
         void lock() {
@@ -279,6 +218,21 @@ private:
         }
     }
 
+    struct RankInfo {
+        unsigned rank;
+        PieceInfo*[N_THREADS] rank_pieces;
+        rwlock rank_lk;
+
+        RankInfo(unsigned my_rank) : rank(rank);
+        
+        void lock() {
+            rank_lk.write_lock();
+        }
+        void unlock() {
+            rank_unlock.write_unlock();
+        }
+    }
+
     TxnInfo tinfos_[N_THREADS];
-    std::vector<PieceInfo*[N_THREADS]> rankinfos_;
+    std::vector<RankInfo> rankinfos_;
 };
