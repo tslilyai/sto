@@ -9,10 +9,11 @@
 #include "Transaction.hh"
 #include "VectorTester.hh"
 
-#define NTRANS 100
-#define MAX_OPS 50
+#define NTRANS 1000
+#define MAX_OPS 20
 #define MAX_VALUE 10 // Max value of integers used in data structures
-#define N_THREADS 1
+#define N_THREADS 10
+#define CHOPPED_OPS 10 
 
 unsigned initial_seeds[64];
 VectorTester<int> tester;
@@ -29,13 +30,9 @@ void* run_whole(void* x) {
         while (1) {
         Sto::start_transaction();
         try {
-            int numOps = slotdist(transgen) % MAX_OPS + 1;
-            int key = slotdist(transgen);
-            int val = slotdist(transgen);
-            
-            for (int j = 0; j < numOps; j++) {
-                int op = slotdist(transgen) % tester.num_ops_;
-                tester.doOp(op, me, key, val);
+            for (int j = 0; j < MAX_OPS; j++) {
+                int op = UPDATE;
+                tester.doOp(op, me, j, j);
             }
 
             if (Sto::try_commit()) {
@@ -77,19 +74,13 @@ void* run_chopped(void* x) {
         ChoppedTransaction::start_txn();
         ChoppedTransaction::start_piece(rank++);
         try {
-            int numOps = slotdist(transgen) % MAX_OPS + 1;
-            int key = slotdist(transgen);
-            int val = slotdist(transgen);
-            
-            for (int j = 0; j < 40; j++) {
-                if (j % 2) {
+            for (int j = 0; j < MAX_OPS; j++) {
+                if (j % CHOPPED_OPS == 0) {
                     assert(ChoppedTransaction::try_commit_piece());
-                    std::cout << "Start Piece " << rank << std::endl;
                     ChoppedTransaction::start_piece(rank++);
                 }
-                //int op = slotdist(transgen) % tester.num_ops_;
-                int op = POP;
-                tester.doOp(op, me, key, val);
+                int op = UPDATE;
+                tester.doOp(op, me, j, j);
             }
 
             if (ChoppedTransaction::try_commit_piece()) {
@@ -99,7 +90,6 @@ void* run_chopped(void* x) {
                 TransactionTid::unlock(lock);
 #endif
                 ChoppedTransaction::end_txn();
-                std::cout << "End Txn " << i << std::endl;
                 break;
             } else {
 #if PRINT_DEBUG

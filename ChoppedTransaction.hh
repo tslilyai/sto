@@ -1,10 +1,9 @@
 #pragma once
 
 #include "Transaction.hh"
-#include "rwlock.hh"
 
-#define MAX_NTHREADS 64
-#define MAX_RANKS 128
+#define MAX_NTHREADS 10
+#define MAX_RANK 100
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2
 #define INVALID -1
@@ -43,7 +42,7 @@ public:
     PieceInfo* active_piece;
     int txn_num; // keeps track of 'which' txn we're executing
     bool should_abort;
-    rwlock txn_lk;
+    TransactionTid::type lk;
 
     std::vector<std::pair<TxnInfo*, int>> forward_deps;
     std::vector<std::pair<TxnInfo*, int>> backward_deps;
@@ -66,10 +65,10 @@ public:
     }
     // used to protect accesses to txn_num
     void lock() {
-        txn_lk.write_lock();
+        TransactionTid::lock(lk);
     }
     void unlock() {
-        txn_lk.write_unlock();
+        TransactionTid::unlock(lk);
     }
     void set_should_abort() {
         should_abort = true;
@@ -80,25 +79,34 @@ struct RankInfo {
 public:
     unsigned rank;
     PieceInfo* rank_pieces[MAX_NTHREADS];
-    rwlock rank_lk;
+    TransactionTid::type lk;
 
-    RankInfo() {
-        rank_lk = rwlock();
-    };
+    RankInfo() {};
     
     void lock() {
-        rank_lk.write_lock();
+        TransactionTid::lock(lk);
     }
     void unlock() {
-        rank_lk.write_unlock();
+        TransactionTid::unlock(lk);
     }
 };
 
 TxnInfo tinfos_[MAX_NTHREADS];
-RankInfo rankinfos_[MAX_RANKS];
+RankInfo rankinfos_[MAX_RANK];
 
 class ChoppedTransaction : public Sto {
 public:
+
+    static void print_rankinfos_() {
+        for (unsigned i = 0; i < MAX_RANK; ++i) {
+            std::cout << "Rank " << i << std::endl;
+           for (unsigned j = 0; j < MAX_NTHREADS; ++j) {
+               std::cout << "\tThread " << j << ": " << rankinfos_[i].rank_pieces[j] << std::endl;
+           }
+           std::cout << std::endl;
+        }
+    }
+
     static void start_txn() {
         Sto::start_transaction();
     }
@@ -148,6 +156,7 @@ public:
     }
  
     static void start_piece(int rank) {
+        assert (rank < MAX_RANK);
         auto& txn = tinfos_[TThread::id()];
        
         // enforce monotonic rank ordering
@@ -173,7 +182,6 @@ public:
             // because ftxn can only ever become ok (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece && 
                     (ftxn->active_piece->rank <= rank)) {
-                rankinfos_[rank].unlock();
                 sched_yield();
             }
             if (ftxn->txn_num != tnum) {
@@ -192,6 +200,9 @@ public:
 
     static void abort_txn(TxnInfo* txn) {
         assert(0); // XXX no aborts for now
+        // make sure we unlock our rank 
+        rankinfos_[txn->active_piece->rank].unlock();
+
         assert(txn->should_abort);
         for (auto pi : txn->pieces) {
             pi->aborted = true; // XXX locking might be a bit off?
@@ -240,7 +251,7 @@ public:
                     piece->nreads);
         if (!committed) {
             assert(0); // for now
-            rankinfos_[rank].unlock();
+            abort_txn(&txn);
             return false;
         }
 
@@ -248,13 +259,14 @@ public:
         // iterate through each piece of the same rank in rankinfos_, check for overlaps in r/ws
         for (int i = 0; i < MAX_NTHREADS; ++i) {
             auto pi = rankinfos_[piece->rank].rank_pieces[i];
-            // lock the owner txn. this means that the txn cannot abort / others cannot add 
-            // backward dependencies while we might. 
-            if (pi) {
+            if (pi && pi->owner) {
+                // lock the owner txn. this means that the txn cannot abort / others cannot add 
+                // backward dependencies while we might. 
                 pi->owner->lock();
                 if (overlap(pi, piece)) {
                     if (pi->owner->txn_num != pi->txn_num) {
                         if(pi->aborted) {
+                            assert(0);
                             // the txn has already aborted but the piece has not yet been removed
                             // conservatively abort because we might have seen some of the piece changes
                             pi->owner->unlock();
@@ -269,8 +281,8 @@ public:
                     // add dependency
                     pi->owner->backward_deps.push_back(std::make_pair(piece->owner, piece->txn_num));
                     txn.forward_deps.push_back(std::make_pair(pi->owner, pi->txn_num));
-                    pi->owner->unlock();
                 }
+                pi->owner->unlock();
             }
         }
         // update the rankinfo for other txns to see our reads/writes

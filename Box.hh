@@ -86,6 +86,9 @@ public:
     bool is_locked_elsewhere() const {
         return TransactionTid::is_locked_elsewhere(s_.version());
     }
+    bool is_locked() const {
+        return TransactionTid::is_locked(s_.version());
+    }
     bool check_version(version_type v) const {
         return TransactionTid::check_version(s_.version(), v);
     }

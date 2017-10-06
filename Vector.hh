@@ -289,7 +289,6 @@ public:
   }
   
   void transUpdate(const key_type& i, value_type v) {
-    //std::cout << "Writing to " << i << " with value " << v << std::endl;
     Version ver = vecversion_;
     acquire_fence();
     size_type size = size_;

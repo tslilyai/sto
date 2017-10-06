@@ -7,7 +7,7 @@
 #include "Transaction.hh"
 #include "Vector.hh"
 
-#define PRINT_DEBUG 1
+#define PRINT_DEBUG 0
 #define VEC_SIZE 1000
 
 #define READ 0
