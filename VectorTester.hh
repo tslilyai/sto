@@ -7,17 +7,14 @@
 #include "Transaction.hh"
 #include "Vector.hh"
 
+#define PRINT_DEBUG 1
 #define VEC_SIZE 1000
 
-#define FIND 0
-#define INSERT 1
-#define DELETE 2
-#define SIZE 3
-#define ITER_BEGIN 3
-#define ITER_HASNEXT 4
-#define ITER_RESET 5
-#define ITER_NEXT 6
-#define ITER_NTHNEXT 7
+#define READ 0
+#define PUSH 1
+#define POP 2
+#define UPDATE 3 
+#define SIZE 4
 
 struct Rand {
     typedef uint32_t result_type;
@@ -80,7 +77,7 @@ public:
 #if !PRINT_DEBUG
         (void)me;
 #endif
-        if (op == 0) {
+        if (op == UPDATE) {
 #if PRINT_DEBUG
             TransactionTid::lock(lock);
             std::cout << "[" << me << "] try to update " << key << ", " << val << std::endl;
@@ -99,7 +96,7 @@ public:
 #else
             (void)outOfBounds;
 #endif
-        } else if (op == 1) {
+        } else if (op == READ) {
 #if PRINT_DEBUG
             TransactionTid::lock(lock);
             std::cout << "[" << me << "] try to read " << key << std::endl;
@@ -118,7 +115,7 @@ public:
 #else
             (void)outOfBounds;
 #endif
-        } else if (op == 2) {
+        } else if (op == PUSH) {
 #if PRINT_DEBUG
             TransactionTid::lock(lock);
             std::cout << "[" << me << "] try to push " << val << std::endl;
@@ -130,7 +127,7 @@ public:
             std::cout << "[" << me << "] pushed " << val  << std::endl;
             TransactionTid::unlock(lock);
 #endif
-        } else if (op == 3) {
+        } else if (op == POP) {
 #if PRINT_DEBUG
             TransactionTid::lock(lock);
             std::cout << "[" << me << "] try to pop " << std::endl;
@@ -147,7 +144,7 @@ public:
             std::cout << "[" << me << "] popped "  << sz-1 << " " << val << std::endl;
             TransactionTid::unlock(lock);
 #endif
-        } else {
+        } else if (op == SIZE) {
 #if PRINT_DEBUG
             TransactionTid::lock(lock);
             std::cout << "[" << me << "] try size " << std::endl;

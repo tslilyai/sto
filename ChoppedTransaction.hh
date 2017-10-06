@@ -3,7 +3,7 @@
 #include "Transaction.hh"
 #include "rwlock.hh"
 
-#define MAX_NTHREADS 128
+#define MAX_NTHREADS 64
 #define MAX_RANKS 128
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2
@@ -116,14 +116,11 @@ public:
             // we don't have to lock when we check these
             // because ftxn can only ever become valid (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece) {
-                ftxn->unlock();
                 sched_yield();
-                ftxn->lock();
             }
             if (ftxn->txn_num != tnum) {
                 pair.second = INVALID;
             }
-            ftxn->unlock();
         }
         // need to check if during our wait, we were told to abort
         if (txn.should_abort) {
@@ -164,9 +161,6 @@ public:
         txn.active_piece = pi;
         txn.pieces.push_back(pi);
 
-        // wait for any other transactions who are executing on this rank
-        rankinfos_[rank].lock();
-
         // wait until txns of forward dep have past this rank or committed
         for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
             auto pair = txn.forward_deps.back(); 
@@ -179,23 +173,25 @@ public:
             // because ftxn can only ever become ok (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece && 
                     (ftxn->active_piece->rank <= rank)) {
-                ftxn->unlock();
+                rankinfos_[rank].unlock();
                 sched_yield();
-                ftxn->lock();
             }
             if (ftxn->txn_num != tnum) {
                 pair.second = INVALID;
             }
-            ftxn->unlock();
         }
         
         // check if we have been told to abort before we actually start executing the piece
         if (txn.should_abort) {
             abort_txn(&txn);
         }
+        // wait for any other transactions who are executing on this rank
+        // and prevent any from conflicting
+        rankinfos_[rank].lock();
     }
 
     static void abort_txn(TxnInfo* txn) {
+        assert(0); // XXX no aborts for now
         assert(txn->should_abort);
         for (auto pi : txn->pieces) {
             pi->aborted = true; // XXX locking might be a bit off?

@@ -393,7 +393,7 @@ bool Transaction::try_commit_piece(
 
     TransItem* it = nullptr;
     for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
-        it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
+        it = (tidx % tset_chunk && it ? it + 1 : tset_[tidx / tset_chunk]);
         if (it->has_write()) {
             writekeys[nwriteset] = it->get_void_key();
             writeset[nwriteset++] = tidx;
@@ -404,6 +404,7 @@ bool Transaction::try_commit_piece(
             }
             if (!it->owner()->lock(*it, *this)) {
                 mark_abort_because(it, "commit lock");
+                assert(0);
                 goto abort;
             }
             it->__or_flags(TransItem::lock_bit);
@@ -412,18 +413,19 @@ bool Transaction::try_commit_piece(
         if (it->has_read()) {
             TXP_INCREMENT(txp_total_r);
             readkeys[nreadset++] = it->get_void_key();
-        } 
+       } 
         else if (it->has_predicate()) {
             // treat predicates like reads
             readkeys[nreadset++] = it->get_void_key();
             TXP_INCREMENT(txp_total_check_predicate);
             if (!it->owner()->check_predicate(*it, *this, true)) {
                 mark_abort_because(it, "commit check_predicate");
+                assert(0);
                 goto abort;
             }
         }
     }
-
+    
     if (tset_piece_begin_ == 0) {
         // set the first write for aborting the entire txn
         first_write_ = writeset[0];
@@ -452,6 +454,7 @@ bool Transaction::try_commit_piece(
             TransItem* me = &tset_[*it / tset_chunk][*it % tset_chunk];
             if (!me->owner()->lock(*me, *this)) {
                 mark_abort_because(me, "commit lock");
+                assert(0);
                 goto abort;
             }
             me->__or_flags(TransItem::lock_bit);
@@ -468,8 +471,10 @@ bool Transaction::try_commit_piece(
             if (!it->owner()->check(*it, *this)
                 && (!may_duplicate_items_ || !preceding_duplicate_read(it))) {
                 mark_abort_because(it, "commit check");
+                assert(0);
                 goto abort;
             }
+            it->__rm_flags(TransItem::read_bit);
         }
     }
 
@@ -532,8 +537,10 @@ void Transaction::finish_commit_piece(unsigned* writeset, unsigned nwriteset) {
                 it = &tset0_[*idxit];
             else
                 it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
-            if (it->has_write()) // always true unless a user turns it off in install()/check()
+            if (it->has_write()) {// always true unless a user turns it off in install()/check()
                 it->owner()->cleanup(*it, true);
+                it->__rm_flags(TransItem::write_bit);
+            }
         } 
     } else {
         if (state_ == s_committing_locked) {
@@ -547,9 +554,11 @@ void Transaction::finish_commit_piece(unsigned* writeset, unsigned nwriteset) {
         it = &tset_[tset_size_ / tset_chunk][tset_size_ % tset_chunk];
         for (unsigned tidx = tset_size_; tidx != first_piece_write_; --tidx) {
             it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
-            if (it->has_write())
+            if (it->has_write()) {
                 it->owner()->cleanup(*it, true);
-        }
+                it->__rm_flags(TransItem::write_bit);
+            }
+       }
     }
 
 after_unlock:

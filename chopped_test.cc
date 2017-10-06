@@ -9,9 +9,8 @@
 #include "Transaction.hh"
 #include "VectorTester.hh"
 
-#define PRINT_DEBUG 0
-#define NTRANS 100 
-#define MAX_OPS 5 
+#define NTRANS 100
+#define MAX_OPS 50
 #define MAX_VALUE 10 // Max value of integers used in data structures
 #define N_THREADS 1
 
@@ -42,8 +41,7 @@ void* run_whole(void* x) {
             if (Sto::try_commit()) {
 #if PRINT_DEBUG
                 TransactionTid::lock(lock);
-                std::cout << "[" << me << "] committed " << numOps << " ops" 
-                    << Sto::commit_tid() << std::endl;
+                std::cout << "[" << me << "] committed " << numOps << " ops" << std::endl;
                 TransactionTid::unlock(lock);
 #endif
                 break;
@@ -74,27 +72,34 @@ void* run_chopped(void* x) {
     std::uniform_int_distribution<long> slotdist(0, MAX_VALUE);
 
     for (int i = 0; i < NTRANS; ++i) {
+        int rank = 0;
         while (1) {
         ChoppedTransaction::start_txn();
-        ChoppedTransaction::start_piece(0);
+        ChoppedTransaction::start_piece(rank++);
         try {
             int numOps = slotdist(transgen) % MAX_OPS + 1;
             int key = slotdist(transgen);
             int val = slotdist(transgen);
             
-            for (int j = 0; j < numOps; j++) {
-                int op = slotdist(transgen) % tester.num_ops_;
+            for (int j = 0; j < 40; j++) {
+                if (j % 2) {
+                    assert(ChoppedTransaction::try_commit_piece());
+                    std::cout << "Start Piece " << rank << std::endl;
+                    ChoppedTransaction::start_piece(rank++);
+                }
+                //int op = slotdist(transgen) % tester.num_ops_;
+                int op = POP;
                 tester.doOp(op, me, key, val);
             }
 
             if (ChoppedTransaction::try_commit_piece()) {
 #if PRINT_DEBUG
                 TransactionTid::lock(lock);
-                std::cout << "[" << me << "] committed " << numOps << " ops" 
-                    << Sto::commit_tid() << std::endl;
+                std::cout << "[" << me << "] committed " << numOps << " ops" << std::endl;
                 TransactionTid::unlock(lock);
 #endif
                 ChoppedTransaction::end_txn();
+                std::cout << "End Txn " << i << std::endl;
                 break;
             } else {
 #if PRINT_DEBUG

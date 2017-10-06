@@ -418,7 +418,7 @@ private:
         tset_size_ = 0;
         tset_next_ = tset0_;
         /* CHOPPING */ 
-        tset_piece_begin_ = 0;
+        tset_piece_begin_ = tset_size_;
         /* END CHOPPING */
 #if TRANSACTION_HASHTABLE
         if (hash_base_ >= 32768) {

@@ -417,12 +417,11 @@ public:
     if (item.key<int>() == vector_key || item.key<int>() == push_back_key)
       return TransactionTid::check_version(vecversion_, item.template read_value<Version>());
     key_type i = item.key<key_type>();
-    assert(i >= 0);
     if (item.flags() & Elem::valid_only_bit) {
-      return i < size_ + trans_size_offs()
-      && !data_[i].is_locked_elsewhere();
+        return i < size_ + trans_size_offs()
+            && !data_[i].is_locked_elsewhere();
     } else
-      return data_[i].check_version(item.template read_value<Version>());
+        return data_[i].check_version(item.template read_value<Version>());
   }
   
   void install(TransItem& item, Transaction& t) override {
