@@ -11,10 +11,10 @@
 #define VEC_SIZE 1000
 
 #define READ 0
-#define PUSH 1
-#define POP 2
-#define UPDATE 3 
-#define SIZE 4
+#define UPDATE 1 
+#define SIZE 2 
+#define PUSH 3
+#define POP 4
 
 struct Rand {
     typedef uint32_t result_type;

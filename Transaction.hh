@@ -13,7 +13,7 @@
 #include <sstream>
 
 #ifndef STO_PROFILE_COUNTERS
-#define STO_PROFILE_COUNTERS 1
+#define STO_PROFILE_COUNTERS 0
 #endif
 #ifndef STO_TSC_PROFILE
 #define STO_TSC_PROFILE 0
@@ -122,6 +122,12 @@ enum txp {
     txp_hco_lock,
     txp_hco_invalid,
     txp_hco_abort,
+    // CHOPPING
+    txp_wait_end,
+    txp_wait_start,
+    txp_wait_invalid,
+    txp_overlap,
+    txp_overlap_invalid,
     // STO_PROFILE_COUNTERS > 1 only
     txp_total_n,
     txp_total_r,
@@ -139,7 +145,7 @@ enum txp {
 #if !STO_PROFILE_COUNTERS
     txp_count = 0
 #elif STO_PROFILE_COUNTERS == 1
-    txp_count = txp_hco_abort + 1
+    txp_count = txp_overlap_invalid + 1
 #else
     txp_count
 #endif
@@ -777,7 +783,6 @@ private:
 
     void hard_check_opacity(TransItem* item, TransactionTid::type t);
     void stop(bool committed, unsigned* writes, unsigned nwrites);
-    void finish_commit_piece(unsigned* writeset, unsigned nwriteset); // CHOPPING 
     
     friend class TransProxy;
     friend class TransItem;

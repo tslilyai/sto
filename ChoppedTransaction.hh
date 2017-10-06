@@ -2,7 +2,7 @@
 
 #include "Transaction.hh"
 
-#define MAX_NTHREADS 10
+#define MAX_NTHREADS 15 
 #define MAX_RANK 100
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2
@@ -124,9 +124,11 @@ public:
             // we don't have to lock when we check these
             // because ftxn can only ever become valid (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece) {
+                TXP_INCREMENT(txp_wait_end);
                 sched_yield();
             }
             if (ftxn->txn_num != tnum) {
+                TXP_INCREMENT(txp_wait_invalid);
                 pair.second = INVALID;
             }
         }
@@ -182,9 +184,11 @@ public:
             // because ftxn can only ever become ok (a "monotonic" relation)
             while (ftxn->txn_num == tnum && ftxn->active_piece && 
                     (ftxn->active_piece->rank <= rank)) {
+                TXP_INCREMENT(txp_wait_start);
                 sched_yield();
             }
             if (ftxn->txn_num != tnum) {
+                TXP_INCREMENT(txp_wait_invalid);
                 pair.second = INVALID;
             }
         }
@@ -264,7 +268,9 @@ public:
                 // backward dependencies while we might. 
                 pi->owner->lock();
                 if (overlap(pi, piece)) {
+                    TXP_INCREMENT(txp_overlap);
                     if (pi->owner->txn_num != pi->txn_num) {
+                        TXP_INCREMENT(txp_overlap_invalid);
                         if(pi->aborted) {
                             assert(0);
                             // the txn has already aborted but the piece has not yet been removed

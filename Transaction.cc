@@ -405,25 +405,15 @@ bool Transaction::try_commit_piece(
             if (!it->owner()->lock(*it, *this)) {
                 mark_abort_because(it, "commit lock");
                 assert(0);
-                goto abort;
             }
             it->__or_flags(TransItem::lock_bit);
 #endif
         }
-        if (it->has_read()) {
+        if (it->has_read() || it->has_predicate()) {
             TXP_INCREMENT(txp_total_r);
             readkeys[nreadset++] = it->get_void_key();
-       } 
-        else if (it->has_predicate()) {
-            // treat predicates like reads
-            readkeys[nreadset++] = it->get_void_key();
-            TXP_INCREMENT(txp_total_check_predicate);
-            if (!it->owner()->check_predicate(*it, *this, true)) {
-                mark_abort_because(it, "commit check_predicate");
-                assert(0);
-                goto abort;
-            }
-        }
+            it->__rm_flags(TransItem::read_bit);
+        } 
     }
     
     if (tset_piece_begin_ == 0) {
@@ -434,9 +424,10 @@ bool Transaction::try_commit_piece(
     first_piece_write_ = writeset[0];
 
     /* 
-     * The following is the same as the traditional STO commit protocol, 
-     * except we only commit those items from tset_piece_begin_ to tset_size_
-     * and we return the state to s_in_progress after finishing the commit
+     * This is the same as the traditional STO commit protocol, except:
+     * - we don't need to check (technically we don't need to lock either)
+     * - we commit only those items from tset_piece_begin_ to tset_size_
+     * - we return the state to s_in_progress after finishing the commit
      */
 
     //phase1
@@ -463,23 +454,7 @@ bool Transaction::try_commit_piece(
     }
 #endif
 
-    //phase2
-    for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
-        it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
-        if (it->has_read()) {
-            TXP_INCREMENT(txp_total_check_read);
-            if (!it->owner()->check(*it, *this)
-                && (!may_duplicate_items_ || !preceding_duplicate_read(it))) {
-                mark_abort_because(it, "commit check");
-                assert(0);
-                goto abort;
-            }
-            it->__rm_flags(TransItem::read_bit);
-        }
-    }
-
     // fence();
-
     //phase3
 #if STO_SORT_WRITESET
     for (unsigned tidx = first_piece_write_; tidx != tset_size_; ++tidx) {
@@ -504,20 +479,10 @@ bool Transaction::try_commit_piece(
 #endif
 
     // fence();
-    finish_commit_piece(writeset, nwriteset);
-    return true;
-
-abort:
-    // we should never abort
-    assert(0);
-    return false;
-}
-
-void Transaction::finish_commit_piece(unsigned* writeset, unsigned nwriteset) {
+    // unlock and cleanup
     TXP_ACCOUNT(txp_max_transbuffer, buf_.buffer_size());
     TXP_ACCOUNT(txp_total_transbuffer, buf_.buffer_size());
 
-    TransItem* it;
     if (!any_writes_)
         goto after_unlock;
 
@@ -564,11 +529,18 @@ void Transaction::finish_commit_piece(unsigned* writeset, unsigned nwriteset) {
 after_unlock:
     tset_piece_begin_ = tset_size_;
     state_ = s_in_progress;
+    return true;
 }
 /* END CHOPPING */
 
 void Transaction::print_stats() {
     txp_counters out = txp_counters_combined();
+    if (out.p(txp_overlap)) {
+        fprintf(stderr,"$ %llu wait end, %llu wait start, %llu wait invalid\n",
+                out.p(txp_wait_end), out.p(txp_wait_start), out.p(txp_wait_invalid));
+        fprintf(stderr,"$ %llu overlap, %llu overlap invalid\n",
+                out.p(txp_overlap), out.p(txp_overlap_invalid));
+    }
     if (txp_count >= txp_max_set) {
         unsigned long long txc_total_starts = out.p(txp_total_starts);
         unsigned long long txc_total_aborts = out.p(txp_total_aborts);

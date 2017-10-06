@@ -10,10 +10,10 @@
 #include "VectorTester.hh"
 
 #define NTRANS 1000
-#define MAX_OPS 20
+#define MAX_OPS 200
 #define MAX_VALUE 10 // Max value of integers used in data structures
-#define N_THREADS 10
-#define CHOPPED_OPS 10 
+#define N_THREADS 15
+#define CHOPPED_OPS 20
 
 unsigned initial_seeds[64];
 VectorTester<int> tester;
@@ -31,7 +31,7 @@ void* run_whole(void* x) {
         Sto::start_transaction();
         try {
             for (int j = 0; j < MAX_OPS; j++) {
-                int op = UPDATE;
+                int op = slotdist(transgen) % 2;
                 tester.doOp(op, me, j, j);
             }
 
@@ -47,7 +47,6 @@ void* run_whole(void* x) {
                 TransactionTid::lock(lock); std::cout << "[" << me 
                     << "] aborted "<< std::endl; TransactionTid::unlock(lock);
 #endif
-                assert(0);
             }
         } catch (Transaction::Abort e) {
 #if PRINT_DEBUG
@@ -79,7 +78,7 @@ void* run_chopped(void* x) {
                     assert(ChoppedTransaction::try_commit_piece());
                     ChoppedTransaction::start_piece(rank++);
                 }
-                int op = UPDATE;
+                int op = slotdist(transgen) % 2;
                 tester.doOp(op, me, j, j);
             }
 
@@ -161,6 +160,10 @@ int main() {
     printf("Chopped time: ");
     print_time(tv1, tv2);
     
+#if STO_PROFILE_COUNTERS
+    Transaction::print_stats();
+    Transaction::clear_stats();
+#endif
 
     gettimeofday(&tv1, NULL);
     
