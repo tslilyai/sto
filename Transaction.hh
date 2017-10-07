@@ -915,6 +915,12 @@ public:
         always_assert(in_progress());
         TThread::txn->state_ = Transaction::s_committing_locked;
     }
+    static void set_state_committed(bool committed) {
+        always_assert(in_progress());
+        TThread::txn->state_ = committed ?
+            Transaction::s_committed 
+            : Transaction::s_aborted;
+    }
     /* END CHOPPING */
 };
 

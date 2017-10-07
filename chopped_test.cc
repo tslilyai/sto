@@ -9,10 +9,10 @@
 #include "Transaction.hh"
 #include "VectorTester.hh"
 
-#define NTRANS 1
+#define NTRANS 2
 #define MAX_OPS 10
 #define MAX_VALUE 10 // Max value of integers used in data structures
-#define N_THREADS 1 
+#define N_THREADS 1
 #define CHOPPED_OPS 5
 
 unsigned initial_seeds[64];

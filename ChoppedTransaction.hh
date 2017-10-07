@@ -140,6 +140,7 @@ public:
             }
         }
         // need to check if during our wait, we were told to abort
+        Sto::set_state_committed(!txn.should_abort);
         if (txn.should_abort) {
             abort_txn(&txn);
         } else {
