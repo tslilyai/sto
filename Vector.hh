@@ -384,7 +384,7 @@ public:
   }
   
   TransProxy add_vector_version(Version ver) const {
-    return vector_item().add_read(ver);
+      return vector_item().add_read(ver);
   }
   
   bool lock(TransItem& item, Transaction&) override {

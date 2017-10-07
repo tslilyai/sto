@@ -304,7 +304,6 @@ bool Transaction::try_commit() {
     }
 #endif
 
-
 #if CONSISTENCY_CHECK
     fence();
     commit_tid();
@@ -393,7 +392,7 @@ bool Transaction::try_commit_piece(
 
     TransItem* it = nullptr;
     for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
-        it = (tidx % tset_chunk && it ? it + 1 : tset_[tidx / tset_chunk]);
+        it = ((tidx % tset_chunk && it) ? it + 1 : &tset_[tidx / tset_chunk][tidx % tset_chunk]);
         if (it->has_write()) {
             writekeys[nwriteset] = it->get_void_key();
             writeset[nwriteset++] = tidx;
@@ -412,10 +411,8 @@ bool Transaction::try_commit_piece(
         if (it->has_read() || it->has_predicate()) {
             TXP_INCREMENT(txp_total_r);
             readkeys[nreadset++] = it->get_void_key();
-            it->__rm_flags(TransItem::read_bit);
         } 
     }
-    
     if (tset_piece_begin_ == 0) {
         // set the first write for aborting the entire txn
         first_write_ = writeset[0];
@@ -468,11 +465,13 @@ bool Transaction::try_commit_piece(
     if (nwriteset) {
         auto writeset_end = writeset + nwriteset;
         for (auto idxit = writeset; idxit != writeset_end; ++idxit) {
-            if (likely(*idxit < tset_initial_capacity))
+            if (likely(*idxit < tset_initial_capacity)) {
                 it = &tset0_[*idxit];
+            }
             else
                 it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
             TXP_INCREMENT(txp_total_w);
+            assert (it->has_write());
             it->owner()->install(*it, *this);
         }
     }
@@ -504,7 +503,7 @@ bool Transaction::try_commit_piece(
                 it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
             if (it->has_write()) {// always true unless a user turns it off in install()/check()
                 it->owner()->cleanup(*it, true);
-                it->__rm_flags(TransItem::write_bit);
+                //it->__rm_flags(TransItem::write_bit);
             }
         } 
     } else {
@@ -521,7 +520,7 @@ bool Transaction::try_commit_piece(
             it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
             if (it->has_write()) {
                 it->owner()->cleanup(*it, true);
-                it->__rm_flags(TransItem::write_bit);
+                //it->__rm_flags(TransItem::write_bit);
             }
        }
     }

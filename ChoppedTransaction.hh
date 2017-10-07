@@ -112,6 +112,13 @@ public:
     }
 
     static void end_txn() {
+#if CONSISTENCY_CHECK
+        fence();
+        Sto::set_state_committing();
+        Sto::commit_tid();
+        fence();
+#endif
+
         auto& txn = tinfos_[TThread::id()];
         // wait until txns of forward dep have committed to commit
         for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
@@ -154,7 +161,6 @@ public:
             }
             txn.pieces.clear();
         }
-        Sto::set_state(!txn.should_abort);
     }
  
     static void start_piece(int rank) {

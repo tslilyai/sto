@@ -75,7 +75,7 @@
 #endif
 #endif
 
-#define CONSISTENCY_CHECK 0
+#define CONSISTENCY_CHECK 1
 #define ASSERT_TX_SIZE 0
 #define TRANSACTION_HASHTABLE 1
 
@@ -909,11 +909,9 @@ public:
         return TThread::txn->try_commit_piece(
                 writeset, writekeys, readkeys, nwrites, nreads);
     }
-    static void set_state(bool committed) {
+    static void set_state_committing() {
         always_assert(in_progress());
-        TThread::txn->state_ = committed ? 
-            Transaction::s_committed : 
-            Transaction::s_aborted;
+        TThread::txn->state_ = Transaction::s_committing_locked;
     }
     /* END CHOPPING */
 };
