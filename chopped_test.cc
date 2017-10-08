@@ -239,8 +239,7 @@ float test_whole() {
 #if STO_PROFILE_COUNTERS
     Transaction::print_stats();
     {
-        txp_counters tc = Transaction::txp_counters_combined();
-printf("\n");
+        //txp_counters tc = Transaction::txp_counters_combined();
         //printf("total_n: %llu, total_r: %llu, total_w: %llu, total_searched: %llu, total_aborts: %llu (%llu aborts at commit time)\n", tc.p(txp_total_n), tc.p(txp_total_r), tc.p(txp_total_w), tc.p(txp_total_searched), tc.p(txp_total_aborts), tc.p(txp_commit_time_aborts));
     }
 #endif
@@ -282,5 +281,5 @@ int main() {
     float chopped = test_chopped();
     Transaction::clear_stats();
     float whole = test_whole();
-    printf("%f\n", whole / chopped);
+    printf("%f", whole / chopped);
 }
