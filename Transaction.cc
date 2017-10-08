@@ -535,8 +535,8 @@ after_unlock:
 void Transaction::print_stats() {
     txp_counters out = txp_counters_combined();
     if (out.p(txp_overlap)) {
-        fprintf(stderr,"$ %llu wait end, %llu wait start, %llu wait invalid\n",
-                out.p(txp_wait_end), out.p(txp_wait_start), out.p(txp_wait_invalid));
+        //fprintf(stderr,"$ %llu wait end, %llu wait start, %llu wait invalid\n",
+         //       out.p(txp_wait_end), out.p(txp_wait_start), out.p(txp_wait_invalid));
         fprintf(stderr,"$ %llu overlap, %llu overlap invalid\n",
                 out.p(txp_overlap), out.p(txp_overlap_invalid));
     }
@@ -545,23 +545,23 @@ void Transaction::print_stats() {
         unsigned long long txc_total_aborts = out.p(txp_total_aborts);
         unsigned long long txc_commit_aborts = out.p(txp_commit_time_aborts);
         unsigned long long txc_total_commits = txc_total_starts - txc_total_aborts;
-        fprintf(stderr, "$ %llu starts, %llu max read set, %llu commits",
-                txc_total_starts, out.p(txp_max_set), txc_total_commits);
+        //fprintf(stderr, "$ %llu starts, %llu max read set, %llu commits",
+         //       txc_total_starts, out.p(txp_max_set), txc_total_commits);
         if (txc_total_aborts) {
             fprintf(stderr, ", %llu (%.3f%%) aborts",
                     out.p(txp_total_aborts),
                     100.0 * (double) out.p(txp_total_aborts) / out.p(txp_total_starts));
-            if (out.p(txp_commit_time_aborts))
-                fprintf(stderr, "\n$ %llu (%.3f%%) of aborts at commit time",
-                        out.p(txp_commit_time_aborts),
-                        100.0 * (double) out.p(txp_commit_time_aborts) / out.p(txp_total_aborts));
+            //if (out.p(txp_commit_time_aborts))
+                //fprintf(stderr, "\n$ %llu (%.3f%%) of aborts at commit time",
+                        //out.p(txp_commit_time_aborts),
+                        //100.0 * (double) out.p(txp_commit_time_aborts) / out.p(txp_total_aborts));
         }
         unsigned long long txc_commit_attempts = txc_total_starts - (txc_total_aborts - txc_commit_aborts);
-        fprintf(stderr, "\n$ %llu commit attempts, %llu (%.3f%%) nonopaque\n",
-                txc_commit_attempts, out.p(txp_commit_time_nonopaque),
-                100.0 * (double) out.p(txp_commit_time_nonopaque) / txc_commit_attempts);
+        //fprintf(stderr, "\n$ %llu commit attempts, %llu (%.3f%%) nonopaque\n",
+        //        txc_commit_attempts, out.p(txp_commit_time_nonopaque),
+         //       100.0 * (double) out.p(txp_commit_time_nonopaque) / txc_commit_attempts);
     }
-    if (txp_count >= txp_hco_abort)
+    /*if (txp_count >= txp_hco_abort)
         fprintf(stderr, "$ %llu HCO (%llu lock, %llu invalid, %llu aborts) out of %llu check attempts (%.3f%%)\n",
                 out.p(txp_hco), out.p(txp_hco_lock), out.p(txp_hco_invalid), out.p(txp_hco_abort), out.p(txp_tco),
                 100.0 * (double) out.p(txp_hco) / out.p(txp_tco));
@@ -572,7 +572,7 @@ void Transaction::print_stats() {
     if (txp_count >= txp_total_transbuffer)
         fprintf(stderr, "$ %llu max buffer per txn, %llu total buffer\n",
                 out.p(txp_max_transbuffer), out.p(txp_total_transbuffer));
-    fprintf(stderr, "$ %llu next commit-tid\n", (unsigned long long) _TID);
+    fprintf(stderr, "$ %llu next commit-tid\n", (unsigned long long) _TID);*/
 
 #if STO_TSC_PROFILE
     tc_counters out_tcs = tc_counters_combined();

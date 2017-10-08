@@ -2,7 +2,7 @@
 
 #include "Transaction.hh"
 
-#define MAX_NTHREADS 15 
+#define MAX_NTHREADS 64
 #define MAX_RANK 100
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2

@@ -13,7 +13,7 @@
 #include <sstream>
 
 #ifndef STO_PROFILE_COUNTERS
-#define STO_PROFILE_COUNTERS 0
+#define STO_PROFILE_COUNTERS 1
 #endif
 #ifndef STO_TSC_PROFILE
 #define STO_TSC_PROFILE 0
@@ -75,7 +75,7 @@
 #endif
 #endif
 
-#define CONSISTENCY_CHECK 1
+#define CONSISTENCY_CHECK 0
 #define ASSERT_TX_SIZE 0
 #define TRANSACTION_HASHTABLE 1
 

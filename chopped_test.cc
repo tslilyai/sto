@@ -9,10 +9,10 @@
 #include "Transaction.hh"
 #include "VectorTester.hh"
 
-#define NTRANS 2
-#define MAX_OPS 10
+#define NTRANS 100
+#define MAX_OPS 100
 #define MAX_VALUE 10 // Max value of integers used in data structures
-#define N_THREADS 1
+#define N_THREADS 3
 #define CHOPPED_OPS 5
 
 unsigned initial_seeds[64];
@@ -28,23 +28,33 @@ void* run_whole(void* x) {
     std::uniform_int_distribution<long> slotdist(0, MAX_VALUE);
 
     for (int i = 0; i < NTRANS; ++i) {
+#if CONSISTENCY_CHECK
         txn_record *tr = new txn_record;
+#endif
         while (1) {
         Sto::start_transaction();
         try {
+#if CONSISTENCY_CHECK
             tr->ops.clear();
+#endif
             for (int j = 0; j < MAX_OPS; j++) {
                 int op = slotdist(transgen) % 2;
+#if CONSISTENCY_CHECK
                 tr->ops.push_back(whole_tester.doOp(op, me, j, j));
-            }
+#else 
+                chopped_tester.doOp(op, me, j, j);
+#endif
+             }
 
             if (Sto::try_commit()) {
+#if CONSISTENCY_CHECK
 #if PRINT_DEBUG
                 TransactionTid::lock(lock);
                 std::cout << "[" << me << "] committed " << Sto::commit_tid() << std::endl;
                 TransactionTid::unlock(lock);
 #endif
                 txn_list[me][Sto::commit_tid()] = tr;
+#endif
                 break;
             } else {
 #if PRINT_DEBUG
@@ -73,29 +83,39 @@ void* run_chopped(void* x) {
 
     for (int i = 0; i < NTRANS; ++i) {
         int rank = 0;
+#if CONSISTENCY_CHECK
         txn_record *tr = new txn_record;
+#endif
         while (1) {
         ChoppedTransaction::start_txn();
         ChoppedTransaction::start_piece(rank++);
         try {
+#if CONSISTENCY_CHECK
             tr->ops.clear();
+#endif
             for (int j = 0; j < MAX_OPS; j++) {
                 if (j % CHOPPED_OPS == 0) {
                     assert(ChoppedTransaction::try_commit_piece());
                     ChoppedTransaction::start_piece(rank++);
                 }
                 int op = slotdist(transgen) % 2;
+#if CONSISTENCY_CHECK
                 tr->ops.push_back(chopped_tester.doOp(op, me, j, j));
+#else 
+                chopped_tester.doOp(op, me, j, j);
+#endif
             }
 
             if (ChoppedTransaction::try_commit_piece()) {
                 ChoppedTransaction::end_txn();
+#if CONSISTENCY_CHECK
 #if PRINT_DEBUG
                 TransactionTid::lock(lock);
                 std::cout << "[" << me << "] committed " << Sto::commit_tid() << std::endl;
                 TransactionTid::unlock(lock);
 #endif
                 txn_list[me][Sto::commit_tid()] = tr;
+#endif
                 break;
             } else {
 #if PRINT_DEBUG
@@ -147,13 +167,15 @@ void print_time(struct timeval tv1, struct timeval tv2) {
     printf("%f\n", (tv2.tv_sec-tv1.tv_sec) + (tv2.tv_usec-tv1.tv_usec)/1000000.0);
 }
 
-void test_chopped() {
+float test_chopped() {
     chopped_tester.init();
 
+#if CONSISTENCY_CHECK
     txn_list.clear();
     for (int i = 0; i < N_THREADS; i++) {
         txn_list.emplace_back();
     }
+#endif
  
     struct timeval tv1,tv2;
     gettimeofday(&tv1, NULL);
@@ -161,14 +183,15 @@ void test_chopped() {
     startAndWaitChopped<int>();
     
     gettimeofday(&tv2, NULL);
-    printf("Chopped time: ");
-    print_time(tv1, tv2);
+    //printf("Chopped time: ");
+    //print_time(tv1, tv2);
     
 #if STO_PROFILE_COUNTERS
     Transaction::print_stats();
     Transaction::clear_stats();
 #endif
 
+#if CONSISTENCY_CHECK
     // Check correctness
     std::map<uint64_t, txn_record*> combined_txn_list;
     for (int i = 0; i < N_THREADS; i++) {
@@ -190,15 +213,19 @@ void test_chopped() {
     print_time(tv1, tv2);
    
     chopped_tester.check();
+#endif
+    return (tv2.tv_sec-tv1.tv_sec) + (tv2.tv_usec-tv1.tv_usec)/1000000.0;
 }
 
-void test_whole() {
+float test_whole() {
     whole_tester.init();
  
+#if CONSISTENCY_CHECK
     txn_list.clear();
     for (int i = 0; i < N_THREADS; i++) {
         txn_list.emplace_back();
     }
+#endif
 
     struct timeval tv1,tv2;
     gettimeofday(&tv1, NULL);
@@ -206,17 +233,19 @@ void test_whole() {
     startAndWaitWhole<int>();
     
     gettimeofday(&tv2, NULL);
-    printf("Whole time: ");
-    print_time(tv1, tv2);
+    //printf("Whole time: ");
+    //print_time(tv1, tv2);
     
 #if STO_PROFILE_COUNTERS
     Transaction::print_stats();
     {
         txp_counters tc = Transaction::txp_counters_combined();
-        printf("total_n: %llu, total_r: %llu, total_w: %llu, total_searched: %llu, total_aborts: %llu (%llu aborts at commit time)\n", tc.p(txp_total_n), tc.p(txp_total_r), tc.p(txp_total_w), tc.p(txp_total_searched), tc.p(txp_total_aborts), tc.p(txp_commit_time_aborts));
+printf("\n");
+        //printf("total_n: %llu, total_r: %llu, total_w: %llu, total_searched: %llu, total_aborts: %llu (%llu aborts at commit time)\n", tc.p(txp_total_n), tc.p(txp_total_r), tc.p(txp_total_w), tc.p(txp_total_searched), tc.p(txp_total_aborts), tc.p(txp_commit_time_aborts));
     }
 #endif
 
+#if CONSISTENCY_CHECK
     /* Check correctness */
     std::map<uint64_t, txn_record*> combined_txn_list;
     for (int i = 0; i < N_THREADS; i++) {
@@ -238,18 +267,20 @@ void test_whole() {
     print_time(tv1, tv2);
    
     whole_tester.check();
+#endif
+    return (tv2.tv_sec-tv1.tv_sec) + (tv2.tv_usec-tv1.tv_usec)/1000000.0;
 }
 
 int main() {
     std::ios_base::sync_with_stdio(true);
-    assert(CONSISTENCY_CHECK); // set CONSISTENCY_CHECK in Transaction.hh
     lock = 0;
 
     pthread_t advancer;
     pthread_create(&advancer, NULL, Transaction::epoch_advancer, NULL);
     pthread_detach(advancer);
 
-    test_chopped();
+    float chopped = test_chopped();
     Transaction::clear_stats();
-    test_whole();
+    float whole = test_whole();
+    printf("%f\n", whole / chopped);
 }
