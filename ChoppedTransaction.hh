@@ -1,9 +1,10 @@
 #pragma once
 
 #include "Transaction.hh"
+#include <vector> 
 
 #define MAX_NTHREADS 64
-#define MAX_RANK 100
+#define MAX_RANK 5
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2
 #define INVALID -1
@@ -63,6 +64,14 @@ public:
             }
         }
     }
+    void init() {
+        forward_deps.clear();
+        backward_deps.clear();
+        active_piece = nullptr; 
+        should_abort = false;
+        txn_num = 0;
+        pieces.clear();
+    }
     // used to protect accesses to txn_num
     void lock() {
         TransactionTid::lock(lk);
@@ -82,7 +91,13 @@ public:
     TransactionTid::type lk;
 
     RankInfo() {};
-    
+
+    void init() {
+        for (unsigned i = 0; i < MAX_NTHREADS; ++i) {
+            rank_pieces[i] = NULL;
+        }
+    }
+     
     void lock() {
         TransactionTid::lock(lk);
     }
@@ -91,8 +106,8 @@ public:
     }
 };
 
-TxnInfo tinfos_[MAX_NTHREADS];
-RankInfo rankinfos_[MAX_RANK];
+extern TxnInfo tinfos_[MAX_NTHREADS];
+extern RankInfo rankinfos_[MAX_RANK];
 
 class ChoppedTransaction : public Sto {
 public:
@@ -265,7 +280,7 @@ public:
             abort_txn(&txn);
             return false;
         }
-
+       
         // check for new dependencies
         // iterate through each piece of the same rank in rankinfos_, check for overlaps in r/ws
         for (int i = 0; i < MAX_NTHREADS; ++i) {
