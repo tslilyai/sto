@@ -194,7 +194,7 @@ public:
         txn.active_piece = pi;
         txn.pieces.push_back(pi);
 
-        // wait until txns of forward dep have past this rank or committed
+        // wait until txns of forward dep have passed this rank or committed
         for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
             auto pair = txn.forward_deps.back(); 
             auto ftxn = pair.first;
