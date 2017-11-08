@@ -96,7 +96,7 @@ void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
     // die on recursive opacity check; this is only possible for predicates
     if (unlikely(state_ == s_opacity_check)) {
         mark_abort_because(item, "recursive opacity check", t);
-    abort:
+abort:
         TXP_INCREMENT(txp_hco_abort);
         abort();
     }
@@ -111,12 +111,13 @@ void Transaction::hard_check_opacity(TransItem* item, TransactionTid::type t) {
     if (t & TransactionTid::nonopaque_bit)
         TXP_INCREMENT(txp_hco_invalid);
 
+    TransItem* it = nullptr;
     state_ = s_opacity_check;
     start_tid_ = _TID;
     release_fence();
-    TransItem* it = nullptr;
-    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
-        it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
+    for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
+        it = ((tidx % tset_chunk && it) ? it + 1 : &tset_[tidx / tset_chunk][tidx % tset_chunk]);
+        //it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         if (it->has_read()) {
             TXP_INCREMENT(txp_total_check_read);
             if (!it->owner()->check(*it, *this)
@@ -503,7 +504,6 @@ bool Transaction::try_commit_piece(
                 it = &tset_[*idxit / tset_chunk][*idxit % tset_chunk];
             if (it->has_write()) {// always true unless a user turns it off in install()/check()
                 it->owner()->cleanup(*it, true);
-                //it->__rm_flags(TransItem::write_bit);
             }
         } 
     } else {
@@ -520,12 +520,24 @@ bool Transaction::try_commit_piece(
             it = (tidx % tset_chunk ? it - 1 : &tset_[(tidx - 1) / tset_chunk][tset_chunk - 1]);
             if (it->has_write()) {
                 it->owner()->cleanup(*it, true);
-                //it->__rm_flags(TransItem::write_bit);
             }
        }
     }
-
 after_unlock:
+    // extra: clean up reads and writes 
+    for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
+        it = ((tidx % tset_chunk && it) ? it + 1 : &tset_[tidx / tset_chunk][tidx % tset_chunk]);
+        if (it->has_write()) {
+            it->__rm_flags(TransItem::write_bit);
+        }
+        if (it->has_read()) { 
+            it->__rm_flags(TransItem::read_bit);
+        }
+        if (it->has_predicate()) {
+            it->__rm_flags(TransItem::predicate_bit);
+        }
+    }
+
     tset_piece_begin_ = tset_size_;
     state_ = s_in_progress;
     return true;

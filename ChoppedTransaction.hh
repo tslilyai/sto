@@ -4,7 +4,7 @@
 #include <vector> 
 
 #define MAX_NTHREADS 64
-#define MAX_RANK 5
+#define MAX_RANK 30
 #define ABORTED_STATE 1
 #define COMMITTED_STATE 2
 #define INVALID -1
