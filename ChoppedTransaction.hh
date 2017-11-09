@@ -123,18 +123,11 @@ public:
     }
 
     static void start_txn() {
-        Sto::start_transaction();
     }
 
     static void end_txn() {
-#if CONSISTENCY_CHECK
-        fence();
-        Sto::set_state_committing();
-        Sto::commit_tid();
-        fence();
-#endif
-
         auto& txn = tinfos_[TThread::id()];
+        
         // wait until txns of forward dep have committed to commit
         for (unsigned i = 0; i < txn.forward_deps.size(); ++i) {
             auto pair = txn.forward_deps.back(); 
@@ -155,12 +148,11 @@ public:
             }
         }
         // need to check if during our wait, we were told to abort
-        Sto::set_state_committed(!txn.should_abort);
         if (txn.should_abort) {
             abort_txn(&txn);
         } else {
-            txn.lock();
-            txn.txn_num++; //people will see this and know we committed
+            txn.lock(); // lock here to protect backward dependencies
+            txn.txn_num++; // people will see this, know we committed, and not add backward deps
             txn.unlock();
             txn.forward_deps.clear();
             txn.backward_deps.clear();
@@ -222,6 +214,7 @@ public:
         // wait for any other transactions who are executing on this rank
         // and prevent any from conflicting
         rankinfos_[rank].lock();
+        Sto::start_transaction();
     }
 
     static void abort_txn(TxnInfo* txn) {
@@ -276,7 +269,6 @@ public:
                     piece->nwrites, 
                     piece->nreads);
         if (!committed) {
-            assert(0); // for now
             abort_txn(&txn);
             return false;
         }
@@ -294,7 +286,6 @@ public:
                     if (pi->owner->txn_num != pi->txn_num) {
                         TXP_INCREMENT(txp_overlap_invalid);
                         if(pi->aborted) {
-                            assert(0);
                             // the txn has already aborted but the piece has not yet been removed
                             // conservatively abort because we might have seen some of the piece changes
                             pi->owner->unlock();
