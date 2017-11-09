@@ -423,9 +423,6 @@ private:
         hash_base_ += tset_size_ + 1;
         tset_size_ = 0;
         tset_next_ = tset0_;
-        /* CHOPPING */ 
-        tset_piece_begin_ = tset_size_;
-        /* END CHOPPING */
 #if TRANSACTION_HASHTABLE
         if (hash_base_ >= 32768) {
             memset(hashtable_, 0, sizeof(hashtable_));
@@ -756,7 +753,6 @@ private:
     int threadid_;
     uint16_t hash_base_;
     uint16_t first_write_;
-    uint16_t first_piece_write_; // CHOPPING 
     uint8_t state_;
     bool any_writes_;
     bool any_nonopaque_;
@@ -764,7 +760,6 @@ private:
     bool is_test_;
     TransItem* tset_next_;
     unsigned tset_size_;
-    unsigned tset_piece_begin_; // CHOPPING 
     mutable tid_type start_tid_;
     mutable tid_type commit_tid_;
     mutable TransactionBuffer buf_;
@@ -910,16 +905,6 @@ public:
         always_assert(in_progress());
         return TThread::txn->try_commit_piece(
                 writeset, writekeys, readkeys, nwrites, nreads);
-    }
-    static void set_state_committing() {
-        always_assert(in_progress());
-        TThread::txn->state_ = Transaction::s_committing_locked;
-    }
-    static void set_state_committed(bool committed) {
-        always_assert(in_progress());
-        TThread::txn->state_ = committed ?
-            Transaction::s_committed 
-            : Transaction::s_aborted;
     }
     /* END CHOPPING */
 };

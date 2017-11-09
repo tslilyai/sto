@@ -115,7 +115,7 @@ abort:
     state_ = s_opacity_check;
     start_tid_ = _TID;
     release_fence();
-    for (unsigned tidx = tset_piece_begin_; tidx != tset_size_; ++tidx) {
+    for (unsigned tidx = 0; tidx != tset_size_; ++tidx) {
         it = ((tidx % tset_chunk && it) ? it + 1 : &tset_[tidx / tset_chunk][tidx % tset_chunk]);
         //it = (tidx % tset_chunk ? it + 1 : tset_[tidx / tset_chunk]);
         if (it->has_read()) {
@@ -464,12 +464,6 @@ bool Transaction::try_commit_piece(
             ++it;
         }
     }
-#endif
-
-#if CONSISTENCY_CHECK
-    fence();
-    commit_tid();
-    fence();
 #endif
 
     //phase2
