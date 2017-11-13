@@ -292,7 +292,7 @@ class Transaction {
 public:
     static constexpr unsigned tset_initial_capacity = 512;
 
-    static constexpr unsigned hash_size = 1024;
+    static constexpr unsigned hash_size = 32768;
     static constexpr unsigned hash_step = 5;
     using epoch_type = TRcuSet::epoch_type;
     using signed_epoch_type = TRcuSet::signed_epoch_type;
