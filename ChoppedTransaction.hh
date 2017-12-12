@@ -211,17 +211,10 @@ public:
         if (txn.should_abort) {
             abort_txn(&txn);
         }
-        // wait for any other transactions who are executing on this rank
-        // and prevent any from conflicting
-        rankinfos_[rank].lock();
         Sto::start_transaction();
     }
 
     static void abort_txn(TxnInfo* txn) {
-        assert(0); // XXX no aborts for now
-        // make sure we unlock our rank 
-        rankinfos_[txn->active_piece->rank].unlock();
-
         assert(txn->should_abort);
         for (auto pi : txn->pieces) {
             pi->aborted = true; // XXX locking might be a bit off?
@@ -258,8 +251,7 @@ public:
 
         // ensure that no other transaction of the same rank can commit (and add deps)
         // so we know that we're checking all the possible pieces that we could have depended on
-        // XXX we already locked this
-        //rankinfos_[rank].lock();
+        rankinfos_[rank].lock();
         
         // this updates the piece info with the relevant info
         bool committed = Sto::try_commit_piece(
@@ -269,7 +261,6 @@ public:
                     piece->nwrites, 
                     piece->nreads);
         if (!committed) {
-            abort_txn(&txn);
             return false;
         }
        
